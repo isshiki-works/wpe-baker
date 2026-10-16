@@ -514,6 +514,15 @@ struct EngineHostState {
     };
     HashMap<owe::SceneNode*, ImageAlignmentHook> image_alignment_hooks;
     HashMap<owe::SceneNode*, NJson>              initial_layer_configs;
+    struct AnimationLayerBinding {
+        owe::SceneNode* node;
+        Arc<owe::PuppetLayer> layer;
+        rstd::int32_t layer_id;
+        String name;
+        float blend_base;
+        Option<owe::SceneAnimationTrack> blend_track;
+    };
+    std::vector<AnimationLayerBinding> animation_layers;
     std::vector<owe::SceneNode*>                  public_layers;
     JsRuntime::BoneIndexResolver                 bone_index_resolver;
     JsRuntime::BoneTransformResolver             bone_transform_resolver;
@@ -1985,6 +1994,7 @@ struct LayerHandle {
 struct AnimationLayerHandle {
     Arc<owe::PuppetLayer> layer;
     rstd::int32_t         layer_id { 0 };
+    owe::SceneNode*       node { nullptr };
 };
 
 owe::SceneNode* ResolveLayerNode(LayerHandle* h) {
@@ -2017,11 +2027,14 @@ struct EffectHandle {
     EngineHostState*            host { nullptr };
     Option<SceneImageEffectRef> ref;
     bool                        fallback_visible { true };
+    owe::SceneNode*             node { nullptr };
 };
 
 struct MaterialHandle {
     EngineHostState* host { nullptr };
     SceneMaterial*   material { nullptr };
+    owe::SceneNode*   node { nullptr };
+    Option<Arc<owe::SceneAnimationPlayback>> property_animation;
 };
 
 int MaterialSetProperty(JSContext* ctx, JSValueConst obj, JSAtom atom, JSValueConst value,
@@ -2072,11 +2085,12 @@ JSValue WrapLayerNode(JSContext* ctx, owe::SceneNode* node, bool property_object
 }
 
 JSValue WrapAnimationLayer(JSContext* ctx, Arc<owe::PuppetLayer> layer,
-                           rstd::int32_t layer_id) {
+                           rstd::int32_t layer_id, owe::SceneNode* node) {
     JSValue object = JS_NewObjectClass(ctx, s_animation_layer_class_id);
     if (JS_IsException(object)) return object;
     JS_SetOpaque(object,
-                 new AnimationLayerHandle { .layer = rstd::move(layer), .layer_id = layer_id });
+                 new AnimationLayerHandle {
+                     .layer = rstd::move(layer), .layer_id = layer_id, .node = node });
     return object;
 }
 
@@ -2139,21 +2153,26 @@ EffectHandle* GetEffectHandle(JSValueConst v) {
     return static_cast<EffectHandle*>(JS_GetOpaque(v, s_effect_class_id));
 }
 
-JSValue WrapEffect(JSContext* ctx, Option<SceneImageEffectRef> ref) {
+JSValue WrapEffect(JSContext* ctx, Option<SceneImageEffectRef> ref,
+                   owe::SceneNode* node = nullptr) {
     JSValue obj = JS_NewObjectClass(ctx, s_effect_class_id);
     if (JS_IsException(obj)) return obj;
     auto* host   = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     bool visible = host && host->scene && ref ? host->scene->ImageEffectRuntimeVisible(*ref) : true;
     JS_SetOpaque(
-        obj, new EffectHandle { .host = host, .ref = std::move(ref), .fallback_visible = visible });
+        obj, new EffectHandle {
+            .host = host, .ref = std::move(ref), .fallback_visible = visible, .node = node });
     return obj;
 }
 
-JSValue WrapMaterial(JSContext* ctx, SceneMaterial* material) {
+JSValue WrapMaterial(JSContext* ctx, SceneMaterial* material, owe::SceneNode* node = nullptr,
+                     Option<Arc<owe::SceneAnimationPlayback>> property_animation = None()) {
     JSValue obj = JS_NewObjectClass(ctx, s_material_class_id);
     if (JS_IsException(obj)) return obj;
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    JS_SetOpaque(obj, new MaterialHandle { .host = host, .material = material });
+    JS_SetOpaque(obj, new MaterialHandle {
+        .host = host, .material = material, .node = node,
+        .property_animation = rstd::move(property_animation) });
     return obj;
 }
 
@@ -2806,14 +2825,14 @@ JSValue NodeGetEffect(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
     if (JS_IsNumber(argv[0])) {
         int64_t index {};
         if (JS_ToInt64(ctx, &index, argv[0]) != 0 || index < 0) return WrapEffect(ctx, None());
-        return WrapEffect(ctx, host->scene->FindNodeImageEffect(*n, usize(index)));
+        return WrapEffect(ctx, host->scene->FindNodeImageEffect(*n, usize(index)), n);
     }
 
     const char* name = JS_ToCString(ctx, argv[0]);
     if (! name) return WrapEffect(ctx, None());
     auto effect = host->scene->FindNodeImageEffect(*n, name);
     JS_FreeCString(ctx, name);
-    return WrapEffect(ctx, std::move(effect));
+    return WrapEffect(ctx, std::move(effect), n);
 }
 
 JSValue NodeGetEffectCount(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
@@ -2840,7 +2859,8 @@ JSValue EffectGetMaterial(JSContext* ctx, JSValueConst this_val, int argc, JSVal
         return WrapMaterial(ctx, nullptr);
     int64_t index {};
     if (JS_ToInt64(ctx, &index, argv[0]) != 0 || index < 0) return WrapMaterial(ctx, nullptr);
-    return WrapMaterial(ctx, handle->host->scene->ImageEffectMaterial(*handle->ref, usize(index)));
+    return WrapMaterial(ctx, handle->host->scene->ImageEffectMaterial(*handle->ref, usize(index)),
+                          handle->node);
 }
 
 JSValue NodeSceneLayerListIncludes(JSContext* ctx, JSValueConst, int argc,
@@ -3347,11 +3367,16 @@ JSClassDef s_animation_class_def {
 };
 
 owe::SceneAnimationPlayback* GetAnimationPlayback(JSValueConst value) {
+    if (auto* layer = GetAnimationLayerHandle(value)) {
+        auto playback = layer->layer->AnimationPlayback(layer->layer_id);
+        return playback.is_some() ? (*playback).as_ptr().as_raw_ptr() : nullptr;
+    }
     auto* handle = static_cast<AnimationHandle*>(JS_GetOpaque(value, s_animation_class_id));
     return handle != nullptr ? handle->playback.as_ptr().as_raw_ptr() : nullptr;
 }
 
 owe::SceneNode* GetAnimationNode(JSValueConst value) {
+    if (auto* layer = GetAnimationLayerHandle(value)) return layer->node;
     auto* handle = static_cast<AnimationHandle*>(JS_GetOpaque(value, s_animation_class_id));
     return handle != nullptr ? handle->node : nullptr;
 }
@@ -3494,6 +3519,99 @@ JSValue PropertyObjectGetAnimation(JSContext* ctx, JSValueConst, int argc, JSVal
     auto* script = host && host->active_field_script ? host->active_field_script->m_impl.get() : nullptr;
     auto* node = script ? script->node : host ? host->loading_node : nullptr;
     return playback.is_some() ? WrapAnimation(ctx, rstd::move(playback), node) : JS_UNDEFINED;
+}
+
+JSValue MaterialGetAnimation(JSContext* ctx, JSValueConst value, int argc, JSValueConst* argv) {
+    auto* handle = static_cast<MaterialHandle*>(JS_GetOpaque(value, s_material_class_id));
+    if (handle == nullptr || handle->material == nullptr) return JS_UNDEFINED;
+    TraceDependency(ctx, "read", "animation", handle->node);
+    if (argc == 0 || JS_IsUndefined(argv[0]) || JS_IsNull(argv[0])) {
+        // Only a property-bound thisObject carries its explicit ForMaterial track.
+        return handle->property_animation.is_some()
+                   ? WrapAnimation(ctx, Some((*handle->property_animation).clone()), handle->node)
+                   : JS_UNDEFINED;
+    }
+    const char* name = JS_ToCString(ctx, argv[0]);
+    if (name == nullptr) return JS_EXCEPTION;
+    auto requested = rstd::cppstd::as_str(name).unwrap();
+    Option<Arc<owe::SceneAnimationPlayback>> playback;
+    handle->material->customShader.valueAnimations.iter().for_each([&](auto entry) {
+        if (playback.is_some()) return;
+        auto [uniform_name, animation] = entry;
+        (void)animation;
+        auto candidate = handle->material->ShaderValueAnimation(uniform_name->as_str());
+        if (candidate.is_some() && (*candidate)->Name() == requested)
+            playback = rstd::move(candidate);
+    });
+    JS_FreeCString(ctx, name);
+    return playback.is_some() ? WrapAnimation(ctx, rstd::move(playback), handle->node)
+                              : JS_UNDEFINED;
+}
+
+JSValue AnimationLayerGetAnimation(JSContext* ctx, JSValueConst value, int argc,
+                                    JSValueConst* argv) {
+    auto* handle = GetAnimationLayerHandle(value);
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (handle == nullptr || host == nullptr) return JS_UNDEFINED;
+    TraceDependency(ctx, "read", "animation", handle->node);
+    const bool named = argc > 0 && ! JS_IsUndefined(argv[0]) && ! JS_IsNull(argv[0]);
+    if (! named) {
+        // thisObject.getAnimation() keeps the current property binding, including
+        // existing visible scripts that control their skeletal layer playback.
+        if (host->active_field_script != nullptr) {
+            const auto* active = host->active_field_script->m_impl.get();
+            auto* object = GetAnimationLayerHandle(active->wrapped_object);
+            if (object != nullptr && object->node == handle->node &&
+                object->layer_id == handle->layer_id)
+                return PropertyObjectGetAnimation(ctx, value, argc, argv);
+        }
+    }
+    const char* name = named ? JS_ToCString(ctx, argv[0]) : nullptr;
+    if (named && name == nullptr) return JS_EXCEPTION;
+    Option<Arc<owe::SceneAnimationPlayback>> playback;
+    for (const auto& binding : host->animation_layers) {
+        if (binding.node != handle->node || binding.layer_id != handle->layer_id ||
+            binding.blend_track.is_none()) continue;
+        const auto& track = *binding.blend_track;
+        if (! named || track.playback->Name() == rstd::cppstd::as_str(name).unwrap())
+            playback = Some(track.playback.clone());
+        break;
+    }
+    if (name != nullptr) JS_FreeCString(ctx, name);
+    return playback.is_some() ? WrapAnimation(ctx, rstd::move(playback), handle->node)
+                              : JS_UNDEFINED;
+}
+
+JSValue NodeGetAnimation(JSContext*, JSValueConst, int, JSValueConst*);
+
+JSValue NodeGetAnimationLayer(JSContext* ctx, JSValueConst value, int argc,
+                               JSValueConst* argv) {
+    auto* node = GetLayerNode(value);
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (node == nullptr || host == nullptr || argc < 1) return JS_UNDEFINED;
+    TraceDependency(ctx, "read", "animation", node);
+    const bool indexed = JS_IsNumber(argv[0]);
+    int32_t index = -1;
+    if (indexed && JS_ToInt32(ctx, &index, argv[0]) != 0) return JS_EXCEPTION;
+    const char* name = indexed ? nullptr : JS_ToCString(ctx, argv[0]);
+    if (! indexed && name == nullptr) return JS_EXCEPTION;
+    JSValue result = JS_UNDEFINED;
+    int32_t current_index = 0;
+    bool registered = false;
+    for (const auto& binding : host->animation_layers) {
+        if (binding.node != node) continue;
+        registered = true;
+        const bool matches = indexed ? current_index == index
+                                     : binding.name.as_str() == rstd::cppstd::as_str(name).unwrap();
+        ++current_index;
+        if (! matches) continue;
+        result = WrapAnimationLayer(ctx, binding.layer.clone(), binding.layer_id, node);
+        break;
+    }
+    if (name != nullptr) JS_FreeCString(ctx, name);
+    // Programmatically registered animation playbacks predate puppet owners.
+    if (! registered && ! indexed) return NodeGetAnimation(ctx, value, argc, argv);
+    return result;
 }
 
 JSValue NodeGetAnimation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -3725,7 +3843,7 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
     JS_CFUNC_DEF("getTextureAnimation", 0, NodeGetTextureAnimation),
     JS_CFUNC_DEF("getVideoTexture", 0, NodeGetVideoTexture),
     JS_CFUNC_DEF("getAnimation", 1, NodeGetAnimation),
-    JS_CFUNC_DEF("getAnimationLayer", 1, NodeGetAnimation),
+    JS_CFUNC_DEF("getAnimationLayer", 1, NodeGetAnimationLayer),
     JS_CFUNC_DEF("createLayer", 1, NodeSceneCreateLayer),
     JS_CFUNC_DEF("destroyLayer", 1, NodeSceneDestroyLayer),
     JS_CFUNC_DEF("getLayerIndex", 1, NodeSceneGetLayerIndex),
@@ -3739,7 +3857,18 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
 const JSCFunctionListEntry s_animation_layer_proto_funcs[] = {
     JS_CGETSET_DEF("visible", AnimationLayerGetVisible, AnimationLayerSetVisible),
     JS_CGETSET_DEF("blend", AnimationLayerGetBlend, AnimationLayerSetBlend),
-    JS_CFUNC_DEF("getAnimation", 1, PropertyObjectGetAnimation),
+    JS_CFUNC_DEF("getAnimation", 1, AnimationLayerGetAnimation),
+    JS_CGETSET_DEF("fps", AnimationGetFps, NodeSetIgnore),
+    JS_CGETSET_DEF("frameCount", AnimationGetFrameCount, NodeSetIgnore),
+    JS_CGETSET_DEF("duration", AnimationGetDuration, NodeSetIgnore),
+    JS_CGETSET_DEF("name", AnimationGetName, NodeSetIgnore),
+    JS_CGETSET_DEF("rate", AnimationGetRate, AnimationSetRate),
+    JS_CFUNC_DEF("play", 0, AnimationPlay),
+    JS_CFUNC_DEF("stop", 0, AnimationStop),
+    JS_CFUNC_DEF("pause", 0, AnimationPause),
+    JS_CFUNC_DEF("setFrame", 1, AnimationSetFrame),
+    JS_CFUNC_DEF("getFrame", 0, AnimationGetFrame),
+    JS_CFUNC_DEF("isPlaying", 0, AnimationIsPlaying),
 };
 
 void InitAnimationLayerClass(JSContext* ctx, JSRuntime* rt) {
@@ -3797,7 +3926,7 @@ const JSCFunctionListEntry s_effect_proto_funcs[] = {
 };
 
 const JSCFunctionListEntry s_material_proto_funcs[] = {
-    JS_CFUNC_DEF("getAnimation", 1, PropertyObjectGetAnimation),
+    JS_CFUNC_DEF("getAnimation", 1, MaterialGetAnimation),
 };
 
 void InitEffectClass(JSContext* ctx, JSRuntime* rt) {
@@ -4283,6 +4412,21 @@ void JsRuntime::RegisterInitialLayerConfig(owe::SceneNode* node, NJson config) {
     AppendPublicLayer(m_impl->host, node);
 }
 
+void JsRuntime::RegisterAnimationLayer(owe::SceneNode* node, Arc<owe::PuppetLayer> layer,
+                                        rstd::int32_t layer_id, ref<str> name, float blend_base,
+                                        Option<owe::SceneAnimationTrack> blend_track) {
+    if (! m_impl || node == nullptr) return;
+    if (blend_track.is_some()) node->RegisterAnimation(blend_track->playback.clone());
+    m_impl->host.animation_layers.push_back({
+        .node = node,
+        .layer = rstd::move(layer),
+        .layer_id = layer_id,
+        .name = String::make(name),
+        .blend_base = blend_base,
+        .blend_track = rstd::move(blend_track),
+    });
+}
+
 void JsRuntime::SetSceneRoot(owe::SceneNode* root) {
     if (! m_impl || ! m_impl->ctx) return;
     if (! JS_IsUndefined(m_impl->wrapped_scene)) JS_FreeValue(m_impl->ctx, m_impl->wrapped_scene);
@@ -4308,6 +4452,23 @@ void JsRuntime::SetSceneRoot(owe::SceneNode* root) {
 
 void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events) {
     JSContext* ctx = m_impl->ctx;
+    // SceneNode has already advanced these shared playbacks and queued markers.
+    // Sample the blend timeline before its script receives the property value.
+    for (const auto& binding : m_impl->host.animation_layers) {
+        if (binding.blend_track.is_none()) continue;
+        const auto sample = binding.blend_track->EvaluateScalar(binding.blend_base);
+        (void)binding.layer->SetAnimationLayerBlend(binding.layer_id, sample);
+        for (const auto& fs : m_impl->scripts) {
+            auto* script = fs->m_impl.get();
+            auto* object = GetAnimationLayerHandle(script->wrapped_object);
+            if (! script->alive || script->property.as_str() != "blend"_str ||
+                object == nullptr || object->node != binding.node ||
+                object->layer_id != binding.layer_id) continue;
+            JS_FreeValue(ctx, script->current_value);
+            script->current_value = JS_NewFloat64(ctx, sample);
+            script->last_value = ScalarValue { sample };
+        }
+    }
     SweepDeferred(ctx, &m_impl->host);
 
     // Cursor event dispatch. For every script bound to a SceneNode, hit-
@@ -4690,14 +4851,15 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
         if (context.puppet_layer.is_some()) {
             wrapped_object = WrapAnimationLayer(ctx,
                                                 rstd::move(*context.puppet_layer),
-                                                context.puppet_animation_layer_id);
+                                                context.puppet_animation_layer_id, node);
         }
         break;
     case ScriptPropertyObjectKind::Effect:
-        wrapped_object = WrapEffect(ctx, rstd::move(context.effect));
+        wrapped_object = WrapEffect(ctx, rstd::move(context.effect), node);
         break;
     case ScriptPropertyObjectKind::Material:
-        wrapped_object = WrapMaterial(ctx, context.material);
+        wrapped_object = WrapMaterial(ctx, context.material, node,
+            context.animation.is_some() ? Some((*context.animation).clone()) : None());
         break;
     }
     JSValueConst layer_value =

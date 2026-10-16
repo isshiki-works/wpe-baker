@@ -161,6 +161,7 @@ void Puppet::prepared() {
         anim.frame_time = 1.0f / anim.fps;
         anim.max_time   = static_cast<double>(anim.length) / anim.fps;
         for (auto& t : anim.bone_tracks) {
+            t.has_authored_frames = HasAuthoredTrack(t);
             for (auto& f : t.frames) {
                 f.quaternion = ToQuaternion(f.angle);
             }
@@ -221,7 +222,7 @@ slice<Eigen::Affine3f> Puppet::genFrame(PuppetLayer& puppet_layer, double time) 
                 continue;
             if (i >= layer.anim->bone_tracks.len()) continue;
             const auto& track = layer.anim->bone_tracks[i];
-            if (! HasAuthoredTrack(track)) continue;
+            if (! track.has_authored_frames) continue;
             const double blend =
                 LayerBoneBlend(*layer.anim, i, layer.interp_info, layer.anim_layer.blend);
             if (blend <= 0.0) continue;
@@ -251,7 +252,7 @@ slice<Eigen::Affine3f> Puppet::genFrame(PuppetLayer& puppet_layer, double time) 
 
             auto& info  = layer.interp_info;
             auto& track = layer.anim->bone_tracks[i];
-            if (! HasAuthoredTrack(track)) continue;
+            if (! track.has_authored_frames) continue;
             auto& frame_base = track.frames[usize()];
             auto& frame_a    = track.frames[info.frame_a];
             auto& frame_b    = track.frames[info.frame_b];
@@ -509,6 +510,7 @@ auto PuppetLayer::AnimationLayer::Clone() const -> AnimationLayer {
         .cur_time  = cur_time,
         .visible_binding =
             visible_binding.is_some() ? Some(NJson(*visible_binding)) : None(),
+        .blend_binding = blend_binding.is_some() ? Some(NJson(*blend_binding)) : None(),
         .visible_can_change = visible_can_change,
         .layer_id  = layer_id,
         .name      = name.clone(),

@@ -302,3 +302,80 @@ TEST(PuppetTwoBoneIkRuntime, ReportsDegenerateAnimatedPoseOffline) {
     ASSERT_FALSE(context.diagnostics.empty());
     EXPECT_NE(context.diagnostics.back().find("degenerate animated pose"), std::string::npos);
 }
+
+TEST(PuppetTrackAuthorship, PreservesDefaultThresholdEmptyAndMissingTrackPoses) {
+    owe::Puppet::BoneFrame base {
+        .position = Eigen::Vector3f::Zero(),
+        .angle = Eigen::Vector3f::Zero(),
+        .scale = Eigen::Vector3f::Ones(),
+    };
+    std::array samples { base, base, base, base, base, base, base };
+    samples[1].scale.setZero();
+    samples[2].position.x() = 0.5e-6f;
+    samples[3].angle.z() = 0.5e-6f;
+    samples[4].scale.x() = 1.000002f;
+    samples[5].angle.z() = 2e-6f;
+    samples[6].position.x() = 4.0f;
+    const std::array expected { false, false, false, false, true, true, true };
+    auto puppet = Arc<owe::Puppet>::make();
+    auto& animation = puppet->anims.emplace_back();
+    animation.id = 7;
+    animation.fps = 1.0;
+    animation.length = 1;
+    animation.mode = owe::Puppet::PlayMode::Single;
+    for (const auto& sample : samples) {
+        auto& track = animation.bone_tracks.emplace_back();
+        track.frames.push(owe::Puppet::BoneFrame(base));
+        track.frames.push(owe::Puppet::BoneFrame(sample)); // Inspect frames after the anchor too.
+    }
+    animation.bone_tracks.emplace_back(); // An empty dense track keeps the bind pose.
+    for (std::size_t i = 0; i < samples.size() + 2; ++i)
+        puppet->bones.emplace_back().local_bind.translate(Eigen::Vector3f { 10, 0, 0 });
+    puppet->prepared();
+    owe::PuppetLayer layer(puppet.clone(), nullptr);
+    owe::PuppetLayer::AnimationLayer authored { .id = 7 };
+    layer.prepared(slice<owe::PuppetLayer::AnimationLayer>::from_raw_parts(&authored, usize(1)));
+    const auto skin = layer.genFrame(0.0);
+    for (std::size_t i = 0; i < samples.size() + 2; ++i) {
+        const bool active = i < expected.size() && expected[i];
+        if (i < samples.size()) EXPECT_EQ(animation.bone_tracks[usize(i)].has_authored_frames, active);
+        const Eigen::Affine3f pose = skin[usize(i)] * puppet->bones[usize(i)].world_bind;
+        EXPECT_NEAR(pose.translation().x(), active ? 0.0f : 10.0f, 1e-6f);
+        EXPECT_TRUE(pose.linear().isApprox(Eigen::Matrix3f::Identity(), 1e-6f));
+    }
+}
+
+TEST(PuppetTrackAuthorship, ReprepareAndClonedLayerUsePreparedTrackAndCurrentPlayback) {
+    auto puppet = Arc<owe::Puppet>::make();
+    puppet->bones.emplace_back();
+    auto& animation = puppet->anims.emplace_back();
+    animation.id = 7;
+    animation.fps = 1.0;
+    animation.length = 1;
+    animation.mode = owe::Puppet::PlayMode::Single;
+    auto& track = animation.bone_tracks.emplace_back();
+    for (int i = 0; i < 2; ++i) track.frames.push(owe::Puppet::BoneFrame {
+        .position = Eigen::Vector3f::Zero(), .angle = Eigen::Vector3f::Zero(),
+        .scale = Eigen::Vector3f::Ones(),
+    });
+    puppet->prepared();
+    EXPECT_FALSE(track.has_authored_frames);
+    track.frames[usize(1)].position.x() = 4.0f;
+    puppet->prepared(); // Asset changes use the existing preparation lifecycle.
+    EXPECT_TRUE(track.has_authored_frames);
+    owe::PuppetLayer::AnimationLayer authored { .id = 7 };
+    auto cloned = authored.Clone();
+    owe::PuppetLayer first(puppet.clone(), nullptr), second(puppet.clone(), nullptr);
+    first.prepared(slice<owe::PuppetLayer::AnimationLayer>::from_raw_parts(&authored, usize(1)));
+    second.prepared(slice<owe::PuppetLayer::AnimationLayer>::from_raw_parts(&cloned, usize(1)));
+    ASSERT_EQ(first.AnimationPlaybacks().len(), usize(1));
+    ASSERT_EQ(second.AnimationPlaybacks().len(), usize(1));
+    first.AnimationPlaybacks()[usize()]->SetFrame(rstd::i32(1));
+    EXPECT_NEAR(first.genFrame(0.0)[usize()].translation().x(), 4.0f, 1e-6f);
+    EXPECT_NEAR(second.genFrame(0.0)[usize()].translation().x(), 0.0f, 1e-6f);
+    second.AnimationPlaybacks()[usize()]->SetFrame(rstd::i32(1));
+    EXPECT_NEAR(second.genFrame(0.0)[usize()].translation().x(), 4.0f, 1e-6f);
+    track.frames[usize(1)].position.setZero();
+    puppet->prepared();
+    EXPECT_FALSE(track.has_authored_frames);
+}

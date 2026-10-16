@@ -187,7 +187,7 @@ internal static class PlaybackEncodeProfileChecks
 
         object mfHevc = Create(4097, 2, false, PlaybackEncoderSelection.Mf);
         check(Value(mfHevc, "Encoder") == "hevc_mf" && Value(mfHevc, "PixelFormat") == "nv12" &&
-            Arguments(mfHevc, "cache.partial.mp4").SequenceEqual(["-c:v", "hevc_mf", "-hw_encoding", "true", "-rate_control", "quality", "-quality", "80", "-pix_fmt", "nv12", "-fps_mode", "passthrough", "-enc_time_base", "1:60", "-movie_timescale", "60", "-video_track_timescale", "60", "-movflags", "+faststart", "cache.partial.mp4"]),
+            Arguments(mfHevc, "cache.partial.mp4").SequenceEqual(["-filter_threads", Math.Min(4, Environment.ProcessorCount).ToString(System.Globalization.CultureInfo.InvariantCulture), "-c:v", "hevc_mf", "-hw_encoding", "true", "-rate_control", "quality", "-quality", "80", "-pix_fmt", "nv12", "-fps_mode", "passthrough", "-enc_time_base", "1:60", "-movie_timescale", "60", "-video_track_timescale", "60", "-movflags", "+faststart", "cache.partial.mp4"]),
             "mf playback profile uses MediaFoundation constant-quality 80 on nv12 with the shared container arguments");
 
         object mfH264 = Create(1920, 1080, false, PlaybackEncoderSelection.Mf);
@@ -218,7 +218,8 @@ internal static class PlaybackEncodeProfileChecks
 
         // ---- 质量升档阶梯 ----
         object mfStep1 = Escalate(mfHevc), mfStep2 = Escalate(mfStep1);
-        check(Arguments(mfStep1, "o.mp4")[7] == "90" && Arguments(mfStep2, "o.mp4")[7] == "96" &&
+        check(Arguments(mfStep1, "o.mp4").SkipWhile(a => a != "-quality").Skip(1).First() == "90" &&
+            Arguments(mfStep2, "o.mp4").SkipWhile(a => a != "-quality").Skip(1).First() == "96" &&
             Step(mfStep2) == 2 && !CanEscalate(mfStep2) && CanEscalate(mfStep1),
             "mf escalates along its own 80/90/96 quality ladder and stops at the top");
 

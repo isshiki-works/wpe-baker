@@ -159,6 +159,62 @@ TEST(RenderGraphDebug, PassStateExposesPublicDebugRecord) {
     EXPECT_TRUE(graph.getPass(owe::rg::PassHandle {}).is_none());
 }
 
+TEST(RenderGraphResources, OnlyExclusiveUnversionedDrawSnapshotsMayOmitTheirCopy) {
+    using Type = owe::rg::PassNode::Type;
+    struct Case {
+        const char* name;
+        Type writer;
+        Type reader;
+        bool previous;
+        bool next;
+        bool second_reader;
+        bool eligible;
+    };
+    for (const auto& test : {
+             Case { "unique draw", Type::Copy, Type::CustomShader, false, false, false, true },
+             Case { "another reader", Type::Copy, Type::CustomShader, false, false, true, false },
+             Case { "draw producer", Type::CustomShader, Type::CustomShader, false, false, false, false },
+             Case { "copy consumer", Type::Copy, Type::Copy, false, false, false, false },
+             Case { "previous contents", Type::Copy, Type::CustomShader, true, false, false, false },
+             Case { "later overwrite", Type::Copy, Type::CustomShader, false, true, false, false },
+         }) {
+        SCOPED_TRACE(test.name);
+        owe::rg::RenderGraph graph;
+        owe::rg::TextureNodeRef snapshot;
+        auto add_write = [&](ref<str> name, Type type) {
+            return graph.addPass<DebugPass>(
+                name, type, [&](owe::rg::RenderGraphBuilder& builder, DebugPass::Desc&) {
+                    auto output = builder.createTexture(CompositeDesc(), true);
+                    builder.write(output);
+                });
+        };
+        if (test.previous) add_write("previous"_str, Type::Copy);
+        auto writer = graph.addPass<DebugPass>(
+            "snapshot"_str, test.writer,
+            [&](owe::rg::RenderGraphBuilder& builder, DebugPass::Desc&) {
+                snapshot = builder.createTexture(CompositeDesc(), true);
+                builder.write(snapshot);
+            });
+        auto reader = graph.addPass<DebugPass>(
+            "consume"_str, test.reader,
+            [&](owe::rg::RenderGraphBuilder& builder, DebugPass::Desc&) {
+                // Two bindings in one draw remain a single consumer.
+                builder.read(snapshot);
+                builder.read(snapshot);
+            });
+        if (test.second_reader) {
+            graph.addPass<DebugPass>(
+                "other draw"_str, Type::CustomShader,
+                [&](owe::rg::RenderGraphBuilder& builder, DebugPass::Desc&) {
+                    builder.read(snapshot);
+                });
+        }
+        if (test.next) add_write("overwrite"_str, Type::Copy);
+        ASSERT_TRUE(graph.topologicalOrder().is_ok());
+        EXPECT_EQ(graph.isExclusiveSnapshot(snapshot, writer, reader), test.eligible);
+    }
+}
+
 TEST(RenderGraphDebug, RejectsDependencyCycles) {
     owe::rg::RenderGraph graph;
     auto                 source = owe::rg::TextureNodeRef {};

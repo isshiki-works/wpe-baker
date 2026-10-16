@@ -15,6 +15,28 @@ using namespace owe::vulkan;
 using namespace rstd::prelude;
 using rstd::cppstd::as_str;
 
+namespace
+{
+bool EmptySnapshotConsumer(owe::SceneNode* node, u32 submesh_index) {
+    if (node == nullptr || node->Mesh() == nullptr) return false;
+    const auto& mesh = *node->Mesh();
+    if (submesh_index.to_primitive() >= mesh.Submeshes().size()) return false;
+    const auto& submesh = mesh.Submeshes()[submesh_index.to_primitive()];
+    if (! submesh.index_arrays.empty()) {
+        // Explicit ranges drive DrawIndexed independently of draw_count.
+        if (! submesh.draw_ranges.empty()) return false;
+        return submesh.index_arrays[0].RenderDataCount() == usize();
+    }
+    if (submesh.vertex_arrays.empty()) return false;
+    // Dynamic updates use stream 0; static preparation sums all streams.
+    if (mesh.Dynamic()) return submesh.vertex_arrays[0].VertexCount() == usize();
+    for (const auto& vertices : submesh.vertex_arrays) {
+        if (vertices.VertexCount() != usize()) return false;
+    }
+    return true;
+}
+} // namespace
+
 CopyPass::CopyPass(Desc&& desc): m_desc(std::move(desc)) {}
 
 CopyPass::~CopyPass() {};
@@ -164,6 +186,12 @@ void CopyPass::record(PassRecordContext& context) {
         .extent = { src.extent.width, src.extent.height, 1 },
     };
     m_desc.before_barriers.Record(cmd);
+    if (src.mipmap_level == 1 && dst.mipmap_level == 1 &&
+        EmptySnapshotConsumer(m_desc.empty_draw_consumer, m_desc.empty_draw_submesh)) {
+        // Keep the prepared image states even though no shader reads this snapshot.
+        m_desc.after_barriers.Record(cmd);
+        return;
+    }
     cmd.CopyImage(src.handle,
                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                   dst.handle,

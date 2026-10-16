@@ -102,6 +102,11 @@ public:
     // 用 other 换走本帧像素（other 里原有的缓冲在下一帧 step 时回收给读回复用）。像素写出交给
     // 别的线程时用它，免得每帧新分配整帧缓冲。
     void exchangePixels(std::vector<uint8_t>& other);
+    // Exchange the mapped token to a consumer, returning consumed tokens immediately.
+    void exchangeBorrowedPixels(BorrowedCpuReadback& other);
+    bool releaseBorrowedPixels(BorrowedCpuReadback& consumed);
+    // For direct synchronous consumption of readback().
+    bool releaseBorrowedPixels();
     OfflineStepStatus stepStatus() const;
     const OfflineAudioFrame& audioReadback() const;
     std::string error() const;

@@ -131,6 +131,10 @@ internal sealed record PlaybackEncodeProfile(string Encoder, string Preset, stri
 
     internal string[] OutputArguments(uint numerator, uint denominator, string output) =>
     [
+        // MF already runs its own hardware pipeline; excess filter workers contend with the renderer.
+        .. (Kind == PlaybackEncoderSelection.Mf
+            ? new[] { "-filter_threads", Math.Min(4, Environment.ProcessorCount).ToString(CultureInfo.InvariantCulture) }
+            : Array.Empty<string>()),
         "-c:v", Encoder, .. QualityArguments(), "-pix_fmt", PixelFormat, "-fps_mode", "passthrough",
         "-enc_time_base", $"{denominator}:{numerator}", "-movie_timescale", numerator.ToString(CultureInfo.InvariantCulture),
         "-video_track_timescale", numerator.ToString(CultureInfo.InvariantCulture),

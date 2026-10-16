@@ -84,6 +84,14 @@ struct ExtraInfo {
     const RenderSceneSnapshot* render_scene { nullptr };
     const RenderLayerSelection* selection { nullptr };
     const RenderCaptureTarget* capture_target { nullptr };
+    struct EmptyDrawSnapshot {
+        rg::NodeHandle copy_pass;
+        rg::TextureNodeRef texture;
+        rg::NodeHandle consumer_pass;
+        SceneNode* node;
+        u32 submesh;
+    };
+    std::vector<EmptyDrawSnapshot> empty_draw_snapshots;
     // 帧间反馈之一：帧内首次写入 LOAD 叠在上一帧残留上。先读后写的纹理见 RenderGraph::frameBoundaries。
     bool                       reads_previous_frame { false };
     // M2：每个输出 key 最近两次写入（版本号、use、变化集；change 为空 = 变化集 FULL）。
@@ -196,9 +204,11 @@ static void AddCopyPass(ExtraInfo& extra, rg::TextureDesc in, rg::TextureDesc ou
 }
 
 static rg::TextureNodeRef AddCopyPass(ExtraInfo& extra, rg::TextureNodeRef in,
-                                      Option<rg::TextureDesc> out_desc = None()) {
+                                      Option<rg::TextureDesc> out_desc = None(),
+                                      const vulkan::CustomShaderPass::Desc* consumer = nullptr,
+                                      rg::NodeHandle consumer_pass = {}) {
     rg::TextureNodeRef copy {};
-    extra.rgraph->addPass<vulkan::CopyPass>(
+    auto copy_pass = extra.rgraph->addPass<vulkan::CopyPass>(
         "copy"_str,
         rg::PassNode::Type::Copy,
         [&copy, in, out_desc = std::move(out_desc), &extra](rg::RenderGraphBuilder& builder,
@@ -222,6 +232,15 @@ static rg::TextureNodeRef AddCopyPass(ExtraInfo& extra, rg::TextureNodeRef in,
                 pdesc.dst_request->name = desc.key.clone();
             }
         });
+    if (consumer != nullptr && consumer->node.is_some() && extra.capture_target == nullptr) {
+        extra.empty_draw_snapshots.push_back(ExtraInfo::EmptyDrawSnapshot {
+            .copy_pass = copy_pass,
+            .texture = copy,
+            .consumer_pass = consumer_pass,
+            .node = consumer->node->as_raw_ptr(),
+            .submesh = consumer->submesh_index,
+        });
+    }
     return copy;
 }
 
@@ -319,7 +338,8 @@ static void AddMaterialTextureReads(SceneMaterial& material, std::string_view pa
                 });
             } else {
                 builder.markSelfWrite(*input);
-                input = Some(AddCopyPass(extra, *input));
+                input = Some(AddCopyPass(extra, *input, None(), &pdesc,
+                                         builder.workPassNode().handle));
                 (void)snapshots.insert(String::make(key), *input);
             }
         }
@@ -961,6 +981,18 @@ Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
     }
 
     StoreMipFramebufferHistory(extra);
+    // Decide after all scene readers exist. Capture FinPass reads are injected
+    // outside this graph, so capture jobs never register these candidates.
+    for (const auto& candidate : extra.empty_draw_snapshots) {
+        if (! rgraph->isExclusiveSnapshot(candidate.texture, candidate.copy_pass,
+                                          candidate.consumer_pass)) continue;
+        auto state = rgraph->passState(candidate.copy_pass);
+        if (state.is_none()) continue;
+        auto pass = rgraph->getPass(state->pass);
+        if (pass.is_none()) continue;
+        auto* copy = dynamic_cast<vulkan::CopyPass*>(&*pass);
+        if (copy != nullptr) copy->setEmptyDrawConsumer(candidate.node, candidate.submesh);
+    }
     // 读上一帧：LOAD 叠加，或有纹理本帧先读后写（_rt_MipMappedFrameBuffer 历史、动态模糊累积缓冲、排在后面的链接图层）
     if (reads_previous_frame)
         *reads_previous_frame = extra.reads_previous_frame || ! rgraph->frameBoundaries().is_empty();

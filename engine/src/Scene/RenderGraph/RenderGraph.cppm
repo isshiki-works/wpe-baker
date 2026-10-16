@@ -96,6 +96,8 @@ public:
         -> Option<WrittenTextureState>;
     auto writtenTexture(NodeHandle writer) const -> Option<WrittenTextureState>;
     auto readTexture(NodeHandle pass_node, TextureNodeRef texture) -> bool;
+    auto isExclusiveSnapshot(TextureNodeRef texture, NodeHandle writer,
+                             NodeHandle reader) const -> bool;
 
     auto topologicalOrder() const
         -> rstd::Result<rstd::vec::Vec<NodeHandle>, RenderGraphOrderError>;

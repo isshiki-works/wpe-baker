@@ -350,6 +350,7 @@ struct VulkanRender::Impl {
     CpuFrameResult drawFrameCpu(Scene&, bool read_pixels, bool raster);
     std::string finishPendingFrame();
     void recycleCpuPixels(std::vector<std::uint8_t>&&);
+    bool releaseCpuReadback(BorrowedCpuReadback&);
     bool initCpuReadback(const RenderInitInfo&);
     bool initSamplePipeline();
     void initGpuTiming(const RenderInitInfo&);
@@ -412,6 +413,10 @@ struct VulkanRender::Impl {
     std::vector<std::uint8_t> m_cpu_pixels_pool;
     VmaImageParameters m_cpu_image;
     VmaBufferParameters m_cpu_staging;
+    VmaBufferParameters m_cpu_staging_second;
+    bool m_borrow_cpu_readback { false };
+    std::array<void*, 2> m_cpu_staging_maps {};
+    std::array<std::uint64_t, 2> m_cpu_staging_serials {};
     std::uint32_t m_readback_width { 0 }, m_readback_height { 0 };
     bool m_sample_readback { false }, m_gpu_samples { false };
     bool m_sample_coverage_enabled { false };
@@ -551,6 +556,9 @@ owe::CpuFrameResult VulkanRender::drawFrameCpu(Scene& scene, bool read_pixels, b
 }
 void VulkanRender::recycleCpuPixels(std::vector<std::uint8_t>&& buffer) {
     pImpl->recycleCpuPixels(rstd::move(buffer));
+}
+bool VulkanRender::releaseCpuReadback(BorrowedCpuReadback& borrowed) {
+    return pImpl->releaseCpuReadback(borrowed);
 }
 void VulkanRender::clearLastRenderGraph(RenderGraphResourceRetention retention) {
     pImpl->clearLastRenderGraph(retention);
@@ -774,6 +782,12 @@ bool VulkanRender::Impl::initRes() {
 }
 
 bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
+    if (info.borrow_cpu_readback && (info.sample_width || info.sample_height ||
+        info.gpu_encode || info.gpu_readback || info.collect_sampling_coverage)) {
+        rstd_error("borrowed CPU readback requires ordinary full RGBA output");
+        return false;
+    }
+    m_borrow_cpu_readback = info.borrow_cpu_readback;
     m_encode_options = info.gpu_encode;
     m_readback_options = info.gpu_readback;
     const auto extent = m_device->out_extent();
@@ -903,6 +917,11 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
     buffer_allocation.preferredFlags = VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
     VVK_CHECK_BOOL_RE(vvk::CreateBuffer(m_device->vma_allocator(), buffer_info,
                                         buffer_allocation, m_cpu_staging.handle));
+    if (m_borrow_cpu_readback) {
+        m_cpu_staging_second.req_size = m_cpu_staging.req_size;
+        VVK_CHECK_BOOL_RE(vvk::CreateBuffer(m_device->vma_allocator(), buffer_info,
+                                            buffer_allocation, m_cpu_staging_second.handle));
+    }
     if (m_sample_coverage_enabled) {
         buffer_info.size = m_sample_coverage.req_size = 32;
         buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -1130,7 +1149,13 @@ void VulkanRender::Impl::destroy() {
         m_sample_descriptors = vvk::DescriptorSetLayout {};
         m_sample_shader = vvk::ShaderModule {};
         m_sample_view = vvk::ImageView {};
+        for (std::uint32_t slot = 0; slot < m_cpu_staging_maps.size(); ++slot) {
+            if (!m_cpu_staging_maps[slot]) continue;
+            BorrowedCpuReadback borrowed { {}, m_cpu_staging_serials[slot], slot };
+            releaseCpuReadback(borrowed);
+        }
         m_cpu_staging.handle = vvk::VmaBuffer {};
+        m_cpu_staging_second.handle = vvk::VmaBuffer {};
         m_sample_coverage.handle = vvk::VmaBuffer {};
         m_cpu_image.handle = vvk::VmaImage {};
 
@@ -1285,12 +1310,20 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         frame.error_code = result;
         frame.message = std::move(operation);
         frame.pixels.clear();
+        frame.borrowed = {};
         frame.gpu_total_ms.reset();
         frame.gpu_draw_ms.reset();
         return std::move(frame);
     };
 
     const auto extent = m_device->out_extent();
+    std::uint32_t readback_slot = 0;
+    if (m_borrow_cpu_readback && read_pixels) {
+        if (m_cpu_staging_maps[0]) readback_slot = 1;
+        if (m_cpu_staging_maps[readback_slot])
+            return fail(VK_ERROR_INITIALIZATION_FAILED, "both borrowed CPU frames are still in use");
+    }
+    auto& staging = readback_slot ? m_cpu_staging_second : m_cpu_staging;
     if (extent.width != m_cpu_image.extent.width || extent.height != m_cpu_image.extent.height) {
         return fail(VK_ERROR_INITIALIZATION_FAILED, "CPU output extent changed; create a new renderer");
     }
@@ -1332,7 +1365,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         return fail(VK_ERROR_INITIALIZATION_FAILED, error);
     // Take the recycled buffer: when it already holds a full frame the resize
     // below is a no-op, so no allocation and no zero fill precede the copy.
-    if (read_pixels) {
+    if (read_pixels && !m_borrow_cpu_readback) {
         frame.pixels = rstd::move(m_cpu_pixels_pool);
         try {
             frame.pixels.resize(static_cast<std::size_t>(m_readback_width) * m_readback_height * 4);
@@ -1442,7 +1475,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         }
         rr.command.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *m_sample_pipeline);
         const VkDescriptorImageInfo image { .imageView = *m_sample_view, .imageLayout = VK_IMAGE_LAYOUT_GENERAL };
-        const VkDescriptorBufferInfo buffer { .buffer = *m_cpu_staging.handle, .offset = 0, .range = m_cpu_staging.req_size };
+        const VkDescriptorBufferInfo buffer { .buffer = *staging.handle, .offset = 0, .range = staging.req_size };
         const VkWriteDescriptorSet image_write {
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 0,
             .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .pImageInfo = &image };
@@ -1451,8 +1484,8 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
             .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &buffer };
         rr.command.PushDescriptorSetKHR(VK_PIPELINE_BIND_POINT_COMPUTE, *m_sample_layout, 0, image_write);
         rr.command.PushDescriptorSetKHR(VK_PIPELINE_BIND_POINT_COMPUTE, *m_sample_layout, 0, buffer_write);
-        const VkDescriptorBufferInfo coverage_buffer { .buffer=m_sample_coverage_enabled ? *m_sample_coverage.handle : *m_cpu_staging.handle,
-            .offset=0,.range=m_sample_coverage_enabled ? 32 : m_cpu_staging.req_size };
+        const VkDescriptorBufferInfo coverage_buffer { .buffer=m_sample_coverage_enabled ? *m_sample_coverage.handle : *staging.handle,
+            .offset=0,.range=m_sample_coverage_enabled ? 32 : staging.req_size };
         const VkWriteDescriptorSet coverage_write { .sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,.dstBinding=2,
             .descriptorCount=1,.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,.pBufferInfo=&coverage_buffer };
         rr.command.PushDescriptorSetKHR(VK_PIPELINE_BIND_POINT_COMPUTE,*m_sample_layout,0,coverage_write);
@@ -1473,15 +1506,15 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         rr.command.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, to_readback);
     } else if (read_pixels && !m_gpu_readback)
         rr.command.CopyImageToBuffer(*m_cpu_image.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                      *m_cpu_staging.handle, region);
+                                      *staging.handle, region);
     if (coverage_last) {
         VkBufferMemoryBarrier ready { .sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
             .srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT,.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT,
             .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
             .buffer=*m_sample_coverage.handle,.offset=0,.size=32 };
         rr.command.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,ready);
-        const VkBufferCopy copy { .srcOffset=0,.dstOffset=m_cpu_staging.req_size-32,.size=32 };
-        m_device->handle().Dispatch().vkCmdCopyBuffer(*rr.command,*m_sample_coverage.handle,*m_cpu_staging.handle,1,&copy);
+        const VkBufferCopy copy { .srcOffset=0,.dstOffset=staging.req_size-32,.size=32 };
+        m_device->handle().Dispatch().vkCmdCopyBuffer(*rr.command,*m_sample_coverage.handle,*staging.handle,1,&copy);
     }
     if (m_timestamp_queries)
         rr.command.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_timestamp_queries.get(), 2);
@@ -1492,9 +1525,9 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
         .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .buffer = *m_cpu_staging.handle,
+        .buffer = *staging.handle,
         .offset = 0,
-        .size = m_cpu_staging.req_size,
+        .size = staging.req_size,
     };
     if ((read_pixels && !m_gpu_readback) || coverage_last) rr.command.PipelineBarrier(
                                 (compact_readback ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT) |
@@ -1601,12 +1634,12 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
     if (coverage_frame) ++m_sample_coverage_observed;
     if ((read_pixels && !m_gpu_readback) || coverage_last) {
         void* mapped = nullptr;
-        result = m_cpu_staging.handle.MapMemory(&mapped);
+        result = staging.handle.MapMemory(&mapped);
         if (result != VK_SUCCESS) return fail(result, "map CPU staging buffer");
         result = vmaInvalidateAllocation(m_device->vma_allocator(),
-                                          m_cpu_staging.handle.Allocation(), 0, VK_WHOLE_SIZE);
+                                          staging.handle.Allocation(), 0, VK_WHOLE_SIZE);
         if (result != VK_SUCCESS) {
-            m_cpu_staging.handle.UnMapMemory();
+            staging.handle.UnMapMemory();
             return fail(result, "invalidate CPU staging buffer");
         }
         if (read_pixels && m_sample_readback && !m_gpu_samples) {
@@ -1629,10 +1662,17 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
                         frame.pixels[(sy * m_readback_width + sx) * 4 + channel] =
                             static_cast<std::uint8_t>((sum[channel] + count / 2) / count);
                 }
+        } else if (read_pixels && m_borrow_cpu_readback) {
+            m_cpu_staging_maps[readback_slot] = mapped;
+            m_cpu_staging_serials[readback_slot] = m_cpu_frame_index + 1;
+            frame.borrowed = {
+                { static_cast<const std::uint8_t*>(mapped),
+                  static_cast<std::size_t>(frame.width) * frame.height * 4 },
+                m_cpu_staging_serials[readback_slot], readback_slot };
         } else if (read_pixels) std::memcpy(frame.pixels.data(), mapped, frame.pixels.size());
         if (coverage_last) {
             std::array<std::uint32_t,8> bounds;
-            std::memcpy(bounds.data(),static_cast<const std::uint8_t*>(mapped)+m_cpu_staging.req_size-32,32);
+            std::memcpy(bounds.data(),static_cast<const std::uint8_t*>(mapped)+staging.req_size-32,32);
             if (m_sample_coverage_sampled_only) {
                 auto merge=[&](std::array<std::uint32_t,8>& into) {
                     into[4]=std::min(into[4],bounds[4]); into[5]=std::max(into[5],bounds[5]);
@@ -1664,7 +1704,7 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
             } else report << ",\"basis\":\"Every full-resolution output frame reduced on GPU, including frames not selected for sampling.\"}";
             frame.sampling_coverage=report.str();
         }
-        m_cpu_staging.handle.UnMapMemory();
+        if (!m_cpu_staging_maps[readback_slot]) staging.handle.UnMapMemory();
     }
     frame.status = m_pending_cpu_submission.Valid() ? CpuFrameStatus::Submitted : CpuFrameStatus::Completed;
     ++m_cpu_frame_index;
@@ -1673,6 +1713,18 @@ owe::CpuFrameResult VulkanRender::Impl::drawFrameCpu(Scene& scene, bool read_pix
 
 void VulkanRender::Impl::recycleCpuPixels(std::vector<std::uint8_t>&& buffer) {
     if (buffer.capacity() >= m_cpu_pixels_pool.capacity()) m_cpu_pixels_pool = rstd::move(buffer);
+}
+
+bool VulkanRender::Impl::releaseCpuReadback(BorrowedCpuReadback& borrowed) {
+    if (borrowed.slot >= m_cpu_staging_maps.size() || !borrowed.serial ||
+        !m_cpu_staging_maps[borrowed.slot] ||
+        borrowed.serial != m_cpu_staging_serials[borrowed.slot]) return false;
+    auto& staging = borrowed.slot ? m_cpu_staging_second : m_cpu_staging;
+    staging.handle.UnMapMemory();
+    m_cpu_staging_maps[borrowed.slot] = nullptr;
+    m_cpu_staging_serials[borrowed.slot] = 0;
+    borrowed = {};
+    return true;
 }
 
 void VulkanRender::Impl::UpdateCameraFillMode(owe::Scene& scene, owe::FillMode fillmode) {
@@ -1852,6 +1904,14 @@ void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg,
         }
         Option<rg::NodeHandle> capture_after;
         if (m_capture_target.has_value()) {
+            // Captures may observe an internal snapshot through the injected
+            // FinPass, even when the caller supplied an ordinary scene graph.
+            for (const auto& record : m_program.pass_records) {
+                auto pass = m_program.resolve(record);
+                if (pass.is_some())
+                    if (auto* copy = dynamic_cast<CopyPass*>(&*pass))
+                        copy->setEmptyDrawConsumer(nullptr, u32());
+            }
             m_capture_binding = ResolveCaptureBinding(scene, rg, *m_capture_target, m_capture_error);
             if (!m_capture_binding.has_value()) {
                 rstd_error("capture selection failed: {}", m_capture_error);

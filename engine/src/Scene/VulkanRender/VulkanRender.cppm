@@ -41,6 +41,14 @@ enum class CpuFrameStatus
     DeviceLost,
 };
 
+// A renderer-owned map; exchange its token to a consumer, then explicitly release it.
+// Copies are views, not independent ownership. Never outlives its renderer.
+struct BorrowedCpuReadback {
+    std::span<const std::uint8_t> pixels;
+    std::uint64_t serial { 0 };
+    std::uint32_t slot { 0 };
+};
+
 // Owns completed pixels or an explicit GPU submission receipt. Submitted frames
 // contain no CPU pixels or completed GPU timing. No pixel view outlives a map.
 struct CpuFrameResult {
@@ -82,6 +90,10 @@ struct CpuFrameResult {
     VkResult                 gpu_timing_error_code { VK_SUCCESS };
     std::string              gpu_timing_message;
     std::vector<std::uint8_t> pixels;
+    BorrowedCpuReadback borrowed;
+    auto pixelBytes() const -> std::span<const std::uint8_t> {
+        return borrowed.serial ? borrowed.pixels : std::span<const std::uint8_t>(pixels);
+    }
     bool                     gpu_sampled { false };
     bool                     gpu_scene_overlap { false };
     std::uint64_t            gpu_readback_frames { 0 };
@@ -166,6 +178,7 @@ struct RenderInitInfo {
     std::uint64_t    max_readback_bytes { 256ull * 1024 * 1024 };
     std::uint64_t    readback_timeout_ns { 10'000'000'000ull };
     bool             gpu_timing { false };
+    bool             borrow_cpu_readback { false };
     // Scale only explicitly eligible image-effect allocations, preserving authored layout.
     double           effect_render_scale { 1.0 };
     bool             match_effect_resolution { false };
@@ -228,6 +241,8 @@ public:
     // zero-fills a full frame before the readback copy overwrites it.
     // Optional: skipping it only costs the allocation.
     void recycleCpuPixels(std::vector<std::uint8_t>&&);
+    // Only after the consumer has finished reading; releases the map on this thread.
+    bool releaseCpuReadback(BorrowedCpuReadback&);
 
     void clearLastRenderGraph(
         RenderGraphResourceRetention retention = RenderGraphResourceRetention::KeepSceneTextures);

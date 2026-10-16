@@ -511,6 +511,46 @@ void WirePuppetAnimationLayerScripts(SceneParseContext& context,
                                      const Arc<PuppetLayer>& puppet_layer,
                                      std::span<PuppetLayer::AnimationLayer> authored_layers) {
     for (const auto& authored : authored_layers) {
+        auto& scripts = EnsureScriptScene(context);
+        auto& runtime = scripts.runtime();
+        wpscene::FieldBindings blend_fields;
+        if (authored.blend_binding.is_some())
+            (void)wpscene::AbsorbFieldBinding("blend", *authored.blend_binding, blend_fields);
+        auto blend_binding = blend_fields.Get("blend"_str);
+        Option<SceneAnimationTrack> blend_track;
+        if (blend_binding.is_some() && (**blend_binding).animation.is_some())
+            blend_track = Some(ResolveAnimationTrack(context, **blend_binding));
+        Option<Arc<SceneAnimationPlayback>> blend_playback;
+        if (blend_track.is_some()) blend_playback = Some(blend_track->playback.clone());
+        runtime.RegisterAnimationLayer(owner.as_ptr(), puppet_layer.clone(), authored.layer_id,
+                                         authored.name.as_str(), static_cast<float>(authored.blend),
+                                         rstd::move(blend_track));
+        if (blend_binding.is_some() && (**blend_binding).script.is_some()) {
+            const auto& binding = **blend_binding;
+            const auto& sb = *binding.script;
+            auto playback = blend_playback.is_some()
+                                ? Some((*blend_playback).clone())
+                                : puppet_layer->AnimationPlayback(authored.layer_id);
+            if (playback.is_some()) {
+                auto* field_script = runtime.MakeFieldScript(
+                    sb.source, utils::genSha1(std::span<const char>(sb.source)),
+                    script::FieldKind::Scalar, binding.ScriptProperties(), sb.initial_value,
+                    script::ScriptBindingContext::ForAnimationLayer(
+                        owner.as_ptr(), puppet_layer.clone(), authored.layer_id,
+                        "blend"_str, rstd::move(*playback)));
+                if (field_script != nullptr) {
+                    SetScriptInitializationOrder(context, *field_script, owner.as_ptr());
+                    TrackRegisteredAssets(context, field_script);
+                    auto hold = CopyableArcHold(puppet_layer.clone());
+                    scripts.AddActuator({ field_script,
+                        [hold, layer_id = authored.layer_id](const script::ScriptValue& value) mutable {
+                            auto blend = ScriptValueAsFloat(value);
+                            if (blend.is_some())
+                                (void)hold.value->SetAnimationLayerBlend(layer_id, *blend);
+                        } });
+                }
+            }
+        }
         if (authored.visible_binding.is_none() || ! authored.visible_binding->is_object()) continue;
 
         auto user_binding = AnimationLayerVisibleUserBinding(*authored.visible_binding);
@@ -551,8 +591,6 @@ void WirePuppetAnimationLayerScripts(SceneParseContext& context,
         }
 
         const auto& script_binding = *(**binding).script;
-        auto&       scripts        = EnsureScriptScene(context);
-        auto&       runtime        = scripts.runtime();
         NJson initial_value = script_binding.initial_value;
         if (user_controls_visibility) {
             auto visible = puppet_layer->AnimationLayerVisible(authored.layer_id);

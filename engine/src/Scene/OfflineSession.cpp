@@ -310,6 +310,10 @@ bool OfflineSession::Impl::runFrame(const FrameClock& clock, const OfflineFrameI
 }
 
 bool OfflineSession::Impl::beginFrame(const FrameClock& clock, const OfflineFrameInput& input) {
+    if (m_cpu_frame.borrowed.serial) {
+        invalidateFrame(clock.index, "previous borrowed CPU frame was not released");
+        return false;
+    }
     /* The consumer has written last frame's pixels out before stepping again.
      * Hand the buffer back to the renderer *before* the result is reset below
      * (the reset would otherwise free it), so this frame's readback reuses the
@@ -1065,6 +1069,15 @@ void OfflineSession::setUserProperty(std::string_view key, NJson value) {
 const CpuFrameResult& OfflineSession::readback() const { return m_impl->m_cpu_frame; }
 
 void OfflineSession::exchangePixels(std::vector<uint8_t>& other) { std::swap(m_impl->m_cpu_frame.pixels, other); }
+void OfflineSession::exchangeBorrowedPixels(BorrowedCpuReadback& other) {
+    std::swap(m_impl->m_cpu_frame.borrowed, other);
+}
+bool OfflineSession::releaseBorrowedPixels(BorrowedCpuReadback& consumed) {
+    return m_impl->m_render->releaseCpuReadback(consumed);
+}
+bool OfflineSession::releaseBorrowedPixels() {
+    return releaseBorrowedPixels(m_impl->m_cpu_frame.borrowed);
+}
 
 OfflineStepStatus OfflineSession::stepStatus() const { return m_impl->m_step_status; }
 

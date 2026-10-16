@@ -182,6 +182,17 @@ auto RenderGraph::readTexture(NodeHandle pass_node, TextureNodeRef texture) -> b
     return true;
 }
 
+auto RenderGraph::isExclusiveSnapshot(TextureNodeRef texture, NodeHandle writer,
+                                      NodeHandle reader) const -> bool {
+    auto node = getTexNode(texture.handle);
+    auto producer = getPassNode(writer);
+    auto consumer = getPassNode(reader);
+    return node && producer && consumer && producer->type == PassNode::Type::Copy &&
+           consumer->type == PassNode::Type::CustomShader && node->writer.is_some() &&
+           *node->writer == writer && node->previous.is_none() && node->next.is_none() &&
+           node->readers.len() == usize(1) && node->readers[usize()] == reader;
+}
+
 auto RenderGraph::writtenTexture(ref<str> key, Option<usize> version) const
     -> Option<WrittenTextureState> {
     Option<WrittenTextureState> selected;

@@ -20,7 +20,14 @@ inline void ReadPuppetAnimationLayers(const owe::NJson&                         
     for (const auto& jLayer : *layers) {
         PuppetLayer::AnimationLayer layer;
         owe::GetJsonValue(jLayer, "animation", layer.id);
-        owe::GetJsonValue(jLayer, "blend", layer.blend);
+        if (auto blend = owe::Find(jLayer, "blend"); blend != nullptr) {
+            if (blend->is_object()) {
+                layer.blend_binding = Some(owe::NJson(*blend));
+                owe::GetJsonValue(*blend, "value", layer.blend, false);
+            } else {
+                owe::GetJsonValue(jLayer, "blend", layer.blend);
+            }
+        }
         owe::GetJsonValue(jLayer, "rate", layer.rate);
         if (auto visible = owe::Find(jLayer, "visible"); visible != nullptr) {
             layer.visible_binding = Some(owe::NJson(*visible));
