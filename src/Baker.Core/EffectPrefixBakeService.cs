@@ -241,7 +241,7 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                         : new(decodePlan.PaddedWidth, decodePlan.PaddedHeight, decodePlan.OffsetX, decodePlan.OffsetY));
                 // Non-Vulkan hardware encoders must also reach prefix captures. Previously auto
                 // successfully selected MF on Intel, then this path silently encoded with libx264.
-                RenderRequest renderRequest = paddedContent is null &&
+                RenderRequest renderRequest = !decodePlan.Vertical &&
                     playbackKind is not PlaybackEncoderSelection.Vulkan and not PlaybackEncoderSelection.Software
                     ? softwareRender with { PlaybackEncoderKind = playbackKind }
                     : softwareRender;
@@ -259,11 +259,10 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
                         RequireOpaquePixels = false, CollectAlphaBounds = !packedAlpha,
                         EncodeWidth = resize ? encodeWidth : null, EncodeHeight = resize ? encodeHeight : null };
                 }
-                else if (playbackKind == PlaybackEncoderSelection.Vulkan ||
-                    paddedContent is not null && playbackKind != PlaybackEncoderSelection.Software)
-                    encoderFallback ??= paddedContent is not null
-                        ? "GPU prefix encoding supports only one-pixel edge padding; using the existing software path."
-                        : "This effect-prefix path supports software or same-device Vulkan encoding.";
+                else if (playbackKind == PlaybackEncoderSelection.Vulkan)
+                    encoderFallback ??= "Vulkan prefix encoding supports only horizontal packing with one-pixel edge padding; using the existing software path.";
+                else if (decodePlan.Vertical && playbackKind != PlaybackEncoderSelection.Software)
+                    encoderFallback ??= "Hardware prefix quality comparison requires horizontal packing; using the existing software path for vertical packing.";
                 JsonObject? earlyHardware = null;
                 try
                 {

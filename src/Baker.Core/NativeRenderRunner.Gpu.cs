@@ -30,6 +30,17 @@ public sealed partial class NativeRenderRunner
             if (request.EncodePadding is null) return content;
             int halves = packed ? 2 : 1;
             byte[] result = new byte[checked(width * canvasHeight * 3)];
+            if (request.GpuEncoding is null)
+            {
+                // FFmpeg pads RGBA with transparent black before splitting RGB and alpha.
+                int offsetX = (int)request.EncodePadding.OffsetX, offsetY = (int)request.EncodePadding.OffsetY;
+                for (int y = 0; y < contentHeight; y++)
+                    for (int half = 0; half < halves; half++)
+                        Buffer.BlockCopy(content, (y * colorWidth * halves + half * colorWidth) * 3,
+                            result, ((y + offsetY) * width + half * canvasWidth + offsetX) * 3, colorWidth * 3);
+                return result;
+            }
+            // Vulkan's one-pixel alignment padding repeats the last content row/column.
             for (int y = 0; y < canvasHeight; y++)
                 for (int half = 0; half < halves; half++)
                 {
@@ -79,11 +90,12 @@ public sealed partial class NativeRenderRunner
         bool pass = QualityGate.Passes(measured.Ssim, QualityGate.DefaultReferenceSsim, QualityGate.DefaultRatio);
         var result = QualityGate.Summarize(samples, QualityGate.DefaultReferenceSsim, QualityGate.DefaultRatio,
             measured.Ssim, measured.Psnr, 0, pass ? QualityGate.ActionAccepted : QualityGate.ActionRejected);
-        result["reference_source"] = resized
-            ? "Retained original renderer RGBA resized with FFmpeg Lanczos, then alpha-packed and converted to BT.709."
-            : request.EncodePadding is not null
-                ? "Retained renderer RGBA with unchanged content pixels and repeated edge padding before alpha packing and BT.709 conversion."
-                : "Retained renderer RGBA with the same integer loop crossfade, crop, packing and BT.709 conversion.";
+        result["reference_source"] = (resized
+            ? "Retained original renderer RGBA resized with FFmpeg Lanczos"
+            : "Retained renderer RGBA with the same integer loop crossfade and crop") +
+            (request.EncodePadding is null ? "" : request.GpuEncoding is null
+                ? ", transparent black padding at the encoded content offsets"
+                : ", repeated edge padding") + ", packing and BT.709 conversion.";
         result["decode_scope"] = measured.DecodeScope;
         result["qp"] = request.GpuEncoding?.Qp;
         if (pass) TemporaryCaptureFiles.Delete(result, output, "quality-reference.rgb", "quality-product.yuv");
