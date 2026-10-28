@@ -21,6 +21,7 @@ struct GpuCaptureOptions {
     // Zero keeps the crop size; otherwise repeat the final column/row into an even canvas.
     std::uint32_t pad_width { 0 }, pad_height { 0 };
     bool require_opaque_pixels { false };
+    int mf_quality { 80 };
 };
 
 // Owns the codec and conversion resources, never the renderer's Vulkan device.

@@ -303,10 +303,13 @@ Job ReadJob(const owe::NJson& json, const fs::path& base) {
         options.codec = String(*encode, "codec", "h264_vulkan");
         options.packed_alpha = Bool(*encode, "packed_alpha", false);
         auto qp = Uint(*encode, "qp", 18);
+        const auto mf_quality = Uint(*encode, "mf_quality", 80);
         if (qp > 51 || job.sample_width || job.raw_stdout || job.output_stride != 1 || job.output_phase ||
-            (options.codec != "h264_vulkan" && options.codec != "hevc_vulkan" && options.codec != "av1_nvenc"))
-            throw std::runtime_error("GPU encoding requires full frames, Vulkan H.264/HEVC or NVENC AV1 and QP 0..51");
+            mf_quality > 100 || (options.codec != "h264_vulkan" && options.codec != "hevc_vulkan" &&
+            options.codec != "av1_nvenc" && options.codec != "h264_mf" && options.codec != "hevc_mf"))
+            throw std::runtime_error("GPU encoding requires full frames, a supported GPU codec, QP 0..51 and MF quality 0..100");
         options.qp = static_cast<int>(qp);
+        options.mf_quality = static_cast<int>(mf_quality);
         options.fps_num = job.fps_num; options.fps_den = job.fps_den;
         options.first_frame = job.warmup; options.frames = job.frames;
         options.encoded_frames = Uint(*encode, "encoded_frames", job.frames);
@@ -906,7 +909,7 @@ int main(int argc, char** argv) {
         }
         if (parsed && version && !render->parsed()) {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-resize-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-encode-padding-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,gpu-sampled-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,gpu-quality-samples-v1,hdr-terminal-affine-v2,hdr-terminal-signed-sqrt-v1,hdr-range-probe-v1\n";
+                      << " features=sparse-readback-v1,gpu-resize-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-encode-padding-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,gpu-sampled-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,gpu-quality-samples-v1,hdr-terminal-affine-v2,hdr-terminal-signed-sqrt-v1,hdr-range-probe-v1,gpu-mf-encode-v1\n";
             return 0;
         }
         if (parsed && !version && render->parsed()) return Render(Path(job));

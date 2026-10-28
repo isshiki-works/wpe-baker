@@ -127,6 +127,7 @@ struct RenderProgram {
         PassResourceUses                resources;
         PassInvalidationFlags           invalidation_flags { PassInvalidationNone };
         bool                            uniforms_need_prepare { true };
+        bool                            active_in_frame { true };
 
         bool invalidated() const { return invalidation_flags != PassInvalidationNone; }
 
@@ -307,9 +308,16 @@ struct RenderProgram {
                     .frame_index = rstd::usize(1),
                 },
         };
+        auto active_graph_passes = rstd::collections::HashSet<owe::rg::NodeHandle>::make();
+        if (capture_after.is_some() && graph.is_some()) {
+            active_graph_passes =
+                static_cast<const owe::rg::RenderGraph&>(**graph).activePassesForCapture(*capture_after);
+        }
         bool captured { false };
         for (auto& record : pass_records) {
             const auto node = record.graph_node;
+            record.active_in_frame =
+                capture_after.is_none() || (node.is_some() && active_graph_passes.contains(*node));
             combined.push(rstd::move(record));
             if (capture_after.is_some() && node.is_some() && *node == *capture_after) {
                 // Copy while this precise graph version is still live, before
@@ -404,6 +412,7 @@ struct RenderProgram {
     void invalidateRenderItems(slice<owe::RenderItemId> render_items, PassInvalidationFlags flags) {
         if (flags == PassInvalidationNone || render_items.is_empty()) return;
         for (auto& record : pass_records) {
+            if (! record.active_in_frame) continue;
             auto pass = resolve(record);
             if (pass.is_none()) continue;
             auto pass_render_item = pass->renderItemId();
@@ -426,6 +435,7 @@ struct RenderProgram {
 
         bool requires_graph_rebuild = false;
         for (auto& record : pass_records) {
+            if (! record.active_in_frame) continue;
             auto pass = resolve(record);
             if (pass.is_none()) continue;
             auto pass_render_item = pass->renderItemId();
@@ -805,6 +815,7 @@ struct RenderProgram {
         const UniformBindingPrepareContext* uniform_prepare = &uniform_prepare_impl;
         Vec<resource::BufferUseHandle> prepared_uniform_buffers;
         for (auto& record : pass_records) {
+            if (!record.active_in_frame) continue;
             if (changed_only && !record.uniforms_need_prepare) continue;
             auto pass = resolve(record);
             if (pass.is_none()) continue;
@@ -852,6 +863,7 @@ struct RenderProgram {
         -> RenderProgramPrepareStatus {
         owe::resource_registry::TextureStatePreparer* state_preparer = &rr.resources.States();
         for (auto& record : pass_records) {
+            if (! record.active_in_frame) continue;
             auto pass = resolve(record);
             if (pass.is_none()) continue;
             if (! pass->prepareResourceStates(state_preparer)) {
@@ -1113,6 +1125,7 @@ struct RenderProgram {
 
         for (rstd::usize index {}; index < pass_records.len(); ++index) {
             auto& record = pass_records[index];
+            if (! record.active_in_frame) continue;
             auto  pass   = resolve(record);
             if (pass.is_none()) continue;
             if (pass->supportsRenderScope()) {
@@ -1181,6 +1194,7 @@ struct RenderProgram {
         }
         resource_registry::GraphicsResourcePreparer* graphics = &rr.resources;
         for (auto& record : pass_records) {
+            if (! record.active_in_frame) continue;
             auto pass = resolve(record);
             if (! pass || ! pass->prepared()) continue;
             PreparedPassResources resources(rr.resources.Prepared(), record.resources);
@@ -1196,6 +1210,7 @@ struct RenderProgram {
             }
         }
         for (auto& record : pass_records) {
+            if (! record.active_in_frame) continue;
             auto pass = resolve(record);
             if (! pass || ! pass->prepared()) continue;
             pass->completeUpdate();

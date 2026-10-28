@@ -681,14 +681,18 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
     inst_exts.push_back({ true, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME });
     for (const auto& extension : base_device_exts) device_exts.push_back(extension);
     if (info.gpu_encode) {
+        const bool media_foundation = info.gpu_encode->codec == "h264_mf" || info.gpu_encode->codec == "hevc_mf";
+        if (!media_foundation) {
         device_exts.push_back({ true, VK_KHR_VIDEO_QUEUE_EXTENSION_NAME });
         device_exts.push_back({ true, VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME });
         device_exts.push_back({ true, VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME });
         device_exts.push_back({ true, info.gpu_encode->codec == "hevc_vulkan"
             ? VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME : VK_KHR_VIDEO_ENCODE_H264_EXTENSION_NAME });
+        }
         device_exts.push_back({ true, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME });
         device_exts.push_back({ true, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME });
         device_exts.push_back({ false, "VK_KHR_external_memory_win32" }); // NVIDIA 上把 NV12 交给 NVENC SDK
+        if (media_foundation) device_exts.push_back({ false, "VK_KHR_win32_keyed_mutex" });
     }
     std::vector<InstanceLayer> inst_layers;
     // valid layer
@@ -892,7 +896,7 @@ bool VulkanRender::Impl::initCpuReadback(const RenderInitInfo& info) {
                     encode.encoded_frames ? encode.encoded_frames : encode.frames, encode.retain_frames,
                     encode.crossfade_frames, encode.crop_x, encode.crop_y, encode.crop_width, encode.crop_height,
                     encode.retain_loop_window, encode.resize_width, encode.resize_height,
-                    encode.pad_width, encode.pad_height });
+                    encode.pad_width, encode.pad_height, false, encode.mf_quality });
         } catch (const std::exception& error) {
             rstd_error("GPU encode initialization: {}", error.what());
             return false;

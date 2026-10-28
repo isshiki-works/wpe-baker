@@ -24,13 +24,14 @@ public sealed partial class NativeRenderRunner
         int canvasHeight = (int)(request.EncodePadding?.Height ?? (uint)contentHeight);
         int width = canvasWidth * (packed ? 2 : 1);
         bool resized = colorWidth != crop.Width || contentHeight != crop.Height;
+        bool gpuPadding = request.GpuEncoding is not null || render["native_frame_transport"]?.GetValue<string>() == "gpu_nv12";
         uint fade = request.GpuEncoding?.CrossfadeFrames ?? request.DirectCrossfadeFrames ?? 0;
         byte[] PadReference(byte[] content)
         {
             if (request.EncodePadding is null) return content;
             int halves = packed ? 2 : 1;
             byte[] result = new byte[checked(width * canvasHeight * 3)];
-            if (request.GpuEncoding is null)
+            if (!gpuPadding)
             {
                 // FFmpeg pads RGBA with transparent black before splitting RGB and alpha.
                 int offsetX = (int)request.EncodePadding.OffsetX, offsetY = (int)request.EncodePadding.OffsetY;
@@ -93,7 +94,7 @@ public sealed partial class NativeRenderRunner
         result["reference_source"] = (resized
             ? "Retained original renderer RGBA resized with FFmpeg Lanczos"
             : "Retained renderer RGBA with the same integer loop crossfade and crop") +
-            (request.EncodePadding is null ? "" : request.GpuEncoding is null
+            (request.EncodePadding is null ? "" : !gpuPadding
                 ? ", transparent black padding at the encoded content offsets"
                 : ", repeated edge padding") + ", packing and BT.709 conversion.";
         result["decode_scope"] = measured.DecodeScope;

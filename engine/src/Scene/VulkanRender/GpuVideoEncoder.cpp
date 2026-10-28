@@ -23,6 +23,7 @@ extern "C" {
 #define FFNV_DEBUG_LOG_FUNC(logctx, msg, ...)
 #include <ffnvcodec/dynlink_loader.h>
 #include <vulkan/vulkan_win32.h>
+#include "GpuMediaFoundation.hpp"
 
 import wescene.shader_compile;
 import wescene.types;
@@ -57,7 +58,7 @@ void Av(int result, const char* operation) {
     if (result >= 0) return;
     char error[AV_ERROR_MAX_STRING_SIZE] {};
     av_strerror(result, error, sizeof(error));
-    throw std::runtime_error(std::string(operation) + ": " + error);
+    throw std::runtime_error(std::string(operation) + ": AVERROR=" + std::to_string(result) + " " + error);
 }
 void Vk(VkResult result, const char* operation) {
     if (result != VK_SUCCESS)
@@ -106,6 +107,7 @@ struct GpuVideoEncoder::Impl {
     VkQueue queue {};
     std::uint32_t family {}, width {}, height {}, output_width {}, output_height {}, stride {}, color_width {};
     AVBufferRef *hardware {}, *frames {};
+    std::unique_ptr<GpuMediaFoundation> mf;
     AVCodecContext* codec {};
     AVFormatContext* mux {};
     AVStream* stream {};
@@ -172,6 +174,9 @@ struct GpuVideoEncoder::Impl {
     std::uint64_t nv_sent {}, nv_collected {};
     bool nv_pending {}, nv_pending_idr {};
     std::int64_t nv_pending_pts {};
+    GpuMediaFoundation::Slot* mf_pending {};
+    bool mf_pending_idr {};
+    std::int64_t mf_pending_pts {};
 
     ~Impl() {
         // On cancellation/error, queued codec work must finish before its resources/device disappear.
@@ -191,9 +196,11 @@ struct GpuVideoEncoder::Impl {
         }
         nvenc_free_functions(&nvenc_dl);
         cuda_free_functions(&cu);
+        avcodec_free_context(&codec);
+        // MF can retain asynchronous D3D samples after send_frame. Close it before releasing shared surfaces.
+        mf.reset();
         av_packet_free(&packet);
         av_frame_free(&frame);
-        avcodec_free_context(&codec);
         av_buffer_unref(&frames);
         av_buffer_unref(&hardware);
         if (mux) { if (mux->pb) avio_closep(&mux->pb); avformat_free_context(mux); }
@@ -256,6 +263,7 @@ struct GpuVideoEncoder::Impl {
 
     void writePacket() {
         {
+            if (mf) mf->packetReturned(packet->pts);
             // Native Vulkan encoders may omit the last packet's duration.
             // Every submitted frame occupies exactly one rational time-base tick.
             if (!packet->duration) packet->duration = 1;
@@ -366,6 +374,26 @@ struct GpuVideoEncoder::Impl {
         Vk(vkWaitForFences(device, 1, &fence, VK_TRUE, timeout_ns), "wait before reusing GPU conversion resources");
         conversion_pending = false;
         if (nv_pending) nvSubmit();
+        if (mf_pending) mfSubmit();
+    }
+
+    void mfSubmit() {
+        auto* slot = mf_pending;
+        mf_pending = nullptr;
+        auto* input = slot->frame;
+        input->pts = mf_pending_pts;
+        input->pict_type = mf_pending_idr ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+        input->duration = 1;
+        input->color_range = codec->color_range; input->colorspace = codec->colorspace;
+        input->color_primaries = codec->color_primaries; input->color_trc = codec->color_trc;
+        mf->holdForEncoder(*slot, input->pts);
+        auto send_result = avcodec_send_frame(codec, input);
+        if (send_result == AVERROR(EAGAIN)) {
+            packets();
+            send_result = avcodec_send_frame(codec, input);
+        }
+        Av(send_result, "submit Media Foundation GPU frame");
+        packets();
     }
 
     void Nv(NVENCSTATUS status, const char* operation) {
@@ -644,6 +672,7 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.device = device; p.gpu = gpu; p.family = graphics_family;
     p.width = width; p.height = height;
     p.raw_readback = codec_name == "rgba_readback";
+    const bool media_foundation = codec_name == "h264_mf" || codec_name == "hevc_mf";
     p.capture = std::move(capture);
     p.capture.crop_width = p.capture.crop_width ? p.capture.crop_width : width;
     p.capture.crop_height = p.capture.crop_height ? p.capture.crop_height : height;
@@ -659,6 +688,8 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     p.resizing = p.capture.resize_width &&
         (p.capture.resize_width!=p.capture.crop_width || p.capture.resize_height!=p.capture.crop_height);
     const bool padding=p.capture.pad_width!=0 || p.capture.pad_height!=0;
+    if (media_foundation && padding && (p.capture.crop_x || p.capture.crop_y))
+        throw std::runtime_error("Media Foundation GPU padding requires a crop at the capture origin");
     if ((p.capture.pad_width==0)!=(p.capture.pad_height==0) || (padding &&
         (p.resizing || p.capture.crossfade_frames || p.capture.pad_width<p.capture.crop_width ||
          p.capture.pad_height<p.capture.crop_height || p.capture.pad_width-p.capture.crop_width>1 ||
@@ -684,12 +715,20 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
         throw std::runtime_error("Invalid GPU capture frame selection");
     if (!width || !height || !fps_num || !fps_den ||
         fps_num > INT32_MAX || fps_den > INT32_MAX || qp < 0 || qp > 51 ||
-        (!p.raw_readback && codec_name != "h264_vulkan" && codec_name != "hevc_vulkan" && codec_name != "av1_nvenc"))
-        throw std::runtime_error("GPU encoding requires positive capture dimensions, a rational FPS and Vulkan H.264/HEVC or NVENC AV1");
+        (media_foundation && (p.capture.mf_quality < 0 || p.capture.mf_quality > 100)) ||
+        (!p.raw_readback && !media_foundation && codec_name != "h264_vulkan" && codec_name != "hevc_vulkan" && codec_name != "av1_nvenc"))
+        throw std::runtime_error("GPU encoding requires positive dimensions, rational FPS, a supported codec and valid quality");
     vkGetDeviceQueue(device, graphics_family, 0, &p.queue);
     p.push_descriptors = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(vkGetDeviceProcAddr(device, "vkCmdPushDescriptorSetKHR"));
     if (!p.push_descriptors) throw std::runtime_error("GPU conversion requires push descriptors");
     if (!p.raw_readback) {
+    if (media_foundation) {
+        if (!avcodec_find_encoder_by_name(codec_name.c_str()))
+            throw std::runtime_error("Requested Media Foundation encoder is absent from libavcodec");
+        p.mf = std::make_unique<GpuMediaFoundation>(gpu, device, device_extensions,
+                                                   p.output_width, p.output_height);
+        p.quality_level = p.capture.mf_quality;
+    } else {
     p.hardware = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_VULKAN);
     if (!p.hardware) throw std::bad_alloc();
     auto* hw = reinterpret_cast<AVHWDeviceContext*>(p.hardware->data);
@@ -737,6 +776,7 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     Av(av_hwframe_ctx_init(p.frames), "allocate Vulkan encoder frame pool");
     if (vkframes->format[0] != VK_FORMAT_G8_B8R8_2PLANE_420_UNORM)
         throw std::runtime_error("Vulkan encoder needs one multiplane NV12 image");
+    }
     // AV1 只走 NVENC SDK：libavcodec 里没有它的编码器，编解码上下文只给封装器提供流参数。
     const bool av1 = codec_name == "av1_nvenc";
     const auto* encoder = av1 ? nullptr : avcodec_find_encoder_by_name(codec_name.c_str());
@@ -745,20 +785,27 @@ GpuVideoEncoder::GpuVideoEncoder(VkInstance instance, VkPhysicalDevice gpu, VkDe
     if (!p.codec) throw std::bad_alloc();
     if (av1) { p.codec->codec_type = AVMEDIA_TYPE_VIDEO; p.codec->codec_id = AV_CODEC_ID_AV1; }
     p.codec->width = static_cast<int>(p.output_width); p.codec->height = static_cast<int>(p.output_height);
-    p.codec->pix_fmt = AV_PIX_FMT_VULKAN; p.codec->sw_pix_fmt = AV_PIX_FMT_NV12;
+    p.codec->pix_fmt = media_foundation ? AV_PIX_FMT_D3D11 : AV_PIX_FMT_VULKAN;
+    p.codec->sw_pix_fmt = AV_PIX_FMT_NV12;
     p.codec->time_base = { static_cast<int>(fps_den), static_cast<int>(fps_num) };
     p.codec->framerate = { static_cast<int>(fps_num), static_cast<int>(fps_den) };
     p.codec->gop_size = 250; p.codec->max_b_frames = 0;
     p.codec->color_range = AVCOL_RANGE_MPEG; p.codec->colorspace = AVCOL_SPC_BT709;
     p.codec->color_primaries = AVCOL_PRI_BT709; p.codec->color_trc = AVCOL_TRC_BT709;
-    p.codec->hw_frames_ctx = av_buffer_ref(p.frames);
+    p.codec->hw_frames_ctx = av_buffer_ref(media_foundation ? p.mf->frames() : p.frames);
+    if (media_foundation) p.codec->hw_device_ctx = av_buffer_ref(p.mf->hardware());
     p.codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    if (!av1) {
+    if (media_foundation) {
+        Av(av_opt_set_int(p.codec->priv_data, "hw_encoding", 1, 0), "require hardware Media Foundation encoding");
+        Av(av_opt_set(p.codec->priv_data, "rate_control", "quality", 0), "set Media Foundation rate control");
+        Av(av_opt_set_int(p.codec->priv_data, "quality", p.capture.mf_quality, 0), "set Media Foundation quality");
+        Av(avcodec_open2(p.codec, encoder, nullptr), "open Media Foundation GPU encoder");
+    } else if (!av1) {
         Av(av_opt_set_int(p.codec->priv_data, "qp", qp, 0), "set Vulkan encoder QP");
         Av(av_opt_get_int(p.codec->priv_data, "quality", 0, &p.quality_level), "read Vulkan encoder quality level");
         Av(av_opt_get_int(p.codec->priv_data, "async_depth", 0, &p.async_depth), "read Vulkan encoder depth");
     }
-    if (!p.openNvenc(device_extensions, codec_name == "hevc_vulkan", av1, qp)) {
+    if (!media_foundation && !p.openNvenc(device_extensions, codec_name == "hevc_vulkan", av1, qp)) {
         if (av1) throw std::runtime_error("NVENC AV1 is unavailable on this device");
         Av(avcodec_open2(p.codec, encoder, nullptr), "open Vulkan encoder");
     }
@@ -1112,10 +1159,21 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
     const auto head_index=blend_head ? index-p.capture.encoded_frames : cache_head ? index : 0;
     ++p.observed_frames;
     AVVkFrame* vkframe {};
-    auto* frames = reinterpret_cast<AVHWFramesContext*>(p.frames->data);
-    auto* vkframes = reinterpret_cast<AVVulkanFramesContext*>(frames->hwctx);
+    GpuMediaFoundation::Slot* mf_slot {};
+    auto* frames = p.frames ? reinterpret_cast<AVHWFramesContext*>(p.frames->data) : nullptr;
+    auto* vkframes = frames ? reinterpret_cast<AVVulkanFramesContext*>(frames->hwctx) : nullptr;
     if (p.nvenc) {
         while (p.nv_sent - p.nv_collected >= p.nv_ring) p.nvCollect();
+    } else if (p.mf) {
+        if (!cache_head) {
+            mf_slot = p.mf->checkout();
+            if (!mf_slot) {
+                p.packets();
+                mf_slot = p.mf->checkout();
+                if (!mf_slot)
+                    throw std::runtime_error("Media Foundation input pool is full and the encoder produced no completed frame");
+            }
+        }
     } else {
         av_frame_unref(p.frame);
         Av(av_hwframe_get_buffer(p.frames, p.frame, 0), "get GPU encoder surface");
@@ -1242,6 +1300,7 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
             if (!cache_head)
                 vkCmdCopyBufferToImage(p.command, p.nv12, vkframe->img[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, copies.data());
         }
+        if (mf_slot) p.mf->recordCopy(*mf_slot, p.command, p.nv12, p.stride, p.family);
         source.srcAccessMask = VK_ACCESS_SHADER_READ_BIT; source.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         source.oldLayout = VK_IMAGE_LAYOUT_GENERAL; source.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         vkCmdPipelineBarrier(p.command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -1258,21 +1317,33 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
             .pWaitDstStageMask = &wait_stage, .commandBufferCount = 1, .pCommandBuffers = &p.command,
             .signalSemaphoreCount = vkframe ? 1u : 0u, .pSignalSemaphores = vkframe ? &vkframe->sem[0] : nullptr };
         if (!vkframe) submit.pNext = nullptr;
-        auto* hw = reinterpret_cast<AVHWDeviceContext*>(p.hardware->data);
-        auto* vk = reinterpret_cast<AVVulkanDeviceContext*>(hw->hwctx);
-        vk->lock_queue(hw, p.family, 0);
+        std::uint64_t acquire_key = 0, release_key = 1;
+        std::uint32_t acquire_timeout_ms = 30000;
+        VkWin32KeyedMutexAcquireReleaseInfoKHR keyed { .sType = VK_STRUCTURE_TYPE_WIN32_KEYED_MUTEX_ACQUIRE_RELEASE_INFO_KHR,
+            .acquireCount = mf_slot ? 1u : 0u, .pAcquireSyncs = mf_slot ? &mf_slot->memory : nullptr,
+            .pAcquireKeys = &acquire_key, .pAcquireTimeouts = &acquire_timeout_ms,
+            .releaseCount = mf_slot ? 1u : 0u, .pReleaseSyncs = mf_slot ? &mf_slot->memory : nullptr,
+            .pReleaseKeys = &release_key };
+        if (mf_slot) submit.pNext = &keyed;
+        auto* hw = p.hardware ? reinterpret_cast<AVHWDeviceContext*>(p.hardware->data) : nullptr;
+        auto* vk = hw ? reinterpret_cast<AVVulkanDeviceContext*>(hw->hwctx) : nullptr;
+        if (vk) vk->lock_queue(hw, p.family, 0);
         const auto submitted = vkQueueSubmit(p.queue, 1, &submit, p.fence);
-        vk->unlock_queue(hw, p.family, 0);
+        if (vk) vk->unlock_queue(hw, p.family, 0);
         Vk(submitted, "submit GPU conversion");
         p.conversion_pending = true;
         if (vkframe) {
             vkframe->sem_value[0] = after;
             vkframe->layout[0] = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             vkframe->access[0] = VK_ACCESS_TRANSFER_WRITE_BIT;
-        } else if (!cache_head) {
+        } else if (!cache_head && p.nvenc) {
             // 等本帧转换完成（下次 waitConversion）再交给 NVENC，渲染与转换仍可重叠
             p.nv_pending = true; p.nv_pending_pts = static_cast<std::int64_t>(index-fade);
             p.nv_pending_idr = blend_head && head_index==0;
+        } else if (!cache_head && mf_slot) {
+            // 等本帧转换完成（下次 waitConversion）再交给 MF，保持上一帧 GPU 与下一帧 CPU 重叠
+            p.mf_pending = mf_slot; p.mf_pending_pts = static_cast<std::int64_t>(index-fade);
+            p.mf_pending_idr = blend_head && head_index==0;
         }
         if (!asynchronous) p.waitConversion();
     } catch (...) {
@@ -1281,13 +1352,14 @@ void GpuVideoEncoder::encode(VkImage rgba, std::uint64_t index, bool asynchronou
         throw;
     }
     if (vkframe) vkframes->unlock_frame(frames, vkframe);
-    if (cache_head || p.nvenc) { p.retain(rgba,index); return; }
-    p.frame->pts = static_cast<std::int64_t>(index-fade);
-    if (blend_head && head_index==0) p.frame->pict_type=AV_PICTURE_TYPE_I;
-    p.frame->duration = 1;
-    p.frame->color_range = p.codec->color_range; p.frame->colorspace = p.codec->colorspace;
-    p.frame->color_primaries = p.codec->color_primaries; p.frame->color_trc = p.codec->color_trc;
-    Av(avcodec_send_frame(p.codec, p.frame), "submit Vulkan encode frame");
+    if (cache_head || p.nvenc || mf_slot) { p.retain(rgba,index); return; }
+    auto* input = p.frame;
+    input->pts = static_cast<std::int64_t>(index-fade);
+    input->pict_type = blend_head && head_index==0 ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+    input->duration = 1;
+    input->color_range = p.codec->color_range; input->colorspace = p.codec->colorspace;
+    input->color_primaries = p.codec->color_primaries; input->color_trc = p.codec->color_trc;
+    Av(avcodec_send_frame(p.codec, input), "submit Vulkan encode frame");
     p.packets();
     p.retain(rgba, index);
 }
@@ -1301,8 +1373,16 @@ void GpuVideoEncoder::finish() {
         p.waitConversion();
         while (p.nv_collected < p.nv_sent) p.nvCollect();
     } else {
-        Av(avcodec_send_frame(p.codec, nullptr), "flush Vulkan encoder");
+        p.waitConversion();
+        auto flush_result = avcodec_send_frame(p.codec, nullptr);
+        if (p.mf && flush_result == AVERROR(EAGAIN)) {
+            p.packets();
+            flush_result = avcodec_send_frame(p.codec, nullptr);
+        }
+        Av(flush_result, p.mf ? "flush Media Foundation GPU encoder" : "flush Vulkan encoder");
         p.packets();
+        if (p.mf && p.mf->outstanding())
+            throw std::runtime_error("Media Foundation flush left incomplete input frames");
     }
     if (!p.raw_readback) {
     if (p.encoded_packets != p.capture.encoded_frames) throw std::runtime_error("Incomplete GPU encoded frame sequence");
@@ -1346,8 +1426,12 @@ std::string GpuVideoEncoder::captureMetadata() const {
     std::ostringstream out;
     out << "{\"readback_frames\":" << p.readbacks
         << ",\"encoded_packets\":" << p.encoded_packets
-        << ",\"quality_level\":" << p.quality_level << ",\"async_depth\":" << p.async_depth
-        << ",\"encoder\":\"" << (p.raw_readback ? "rgba_readback" : p.nvenc ? "nvenc_sdk" : "vulkan_video") << '"';
+        << ",\"quality_level\":" << p.quality_level << ",\"async_depth\":";
+    if (p.mf) out << "null";
+    else out << p.async_depth;
+    out
+        << ",\"encoder\":\"" << (p.raw_readback ? "rgba_readback" : p.mf ? "media_foundation" : p.nvenc ? "nvenc_sdk" : "vulkan_video") << '"';
+    if (p.mf) out << ",\"mf_quality\":" << p.capture.mf_quality;
     if (p.capture.retain_loop_window)
         out << ",\"loop_window\":{\"path\":\"loop-window.rgba\",\"format\":\"rgba\",\"width\":" << p.width
             << ",\"height\":" << p.height << ",\"crossfade_frames\":" << p.capture.crossfade_frames

@@ -93,8 +93,12 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
     private readonly FfmpegTool ff = new(tools);
     private readonly RendererClient client = new(new FfmpegTool(tools));
 
-    public async Task<JsonObject> RenderAsync(RenderRequest request, IProgress<RenderProgress>? progress = null,
+    public Task<JsonObject> RenderAsync(RenderRequest request, IProgress<RenderProgress>? progress = null,
         CancellationToken cancellationToken = default)
+        => RenderCoreAsync(request, progress, cancellationToken, allowNativeMf: true);
+
+    private async Task<JsonObject> RenderCoreAsync(RenderRequest request, IProgress<RenderProgress>? progress,
+        CancellationToken cancellationToken, bool allowNativeMf)
     {
         if (request.HdrRangeProbe) throw new ArgumentException("An HDR range probe requires the raw-frame renderer.");
         if (request.HdrSignedSqrt && (request.HdrScale is not > 0 || request.CaptureTarget is not { EffectTerminal: true, ExactExtent: true }))
@@ -259,10 +263,23 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 request.PixelPacking == "rgb" && request.RequireOpaquePixels && !request.CollectAlphaBounds &&
                 request.DirectCrop is null && request.DirectCrossfadeFrames is null && request.EncodePadding is null &&
                 request.HdrScale is null && !request.HdrSignedSqrt;
+            // MF can consume the same GPU NV12 image through D3D11. Keep unsupported geometry
+            // and CPU per-frame consumers on their existing path.
+            bool mfResizing = encodeWidth != request.Width || encodeHeight != request.Height;
+            bool mfCandidate = allowNativeMf && request.PlaybackEncoderKind == PlaybackEncoderSelection.Mf &&
+                request.GpuEncoding is null && !request.LosslessTest && !request.FrameSamplesOnly && !below &&
+                !request.RequireOpaquePixels && request.ForceKeyFrameFrame is null && request.FrameSampleStride == 0 &&
+                request.DirectCrop is null && request.DirectCrossfadeFrames is null &&
+                (request.EncodePadding is null || !mfResizing && request.EncodePadding is { OffsetX: 0, OffsetY: 0 } mfPad &&
+                    mfPad.Width - encodeWidth <= 1 && mfPad.Height - encodeHeight <= 1);
             // 只在要按能力分支时才握手；同一个渲染器文件在进程内只跑一次 --version（RendererClient 缓存）。
             bool hdrTerminal = request.HdrScale is > 0 && request.CaptureTarget?.EffectTerminal == true;
-            RendererCapabilities capabilities = sampleConsumer || resizeReadbackCandidate || request.GpuEncoding is not null || request.EffectRenderScale != 1.0 || request.MatchEffectResolution || request.CaptureTarget?.ForceVisibleOwner == true || hdrTerminal || request.HdrLowerBound != 0
+            RendererCapabilities capabilities = mfCandidate || sampleConsumer || resizeReadbackCandidate || request.GpuEncoding is not null || request.EffectRenderScale != 1.0 || request.MatchEffectResolution || request.CaptureTarget?.ForceVisibleOwner == true || hdrTerminal || request.HdrLowerBound != 0
                 ? await client.CapabilitiesAsync(Path.Combine(output, "renderer-capabilities.stderr.log"), cancellationToken) : new([]);
+            bool nativeMf = mfCandidate && capabilities.Has("gpu-mf-encode-v1");
+            PlaybackEncodeProfile? mfProfile = nativeMf ? PlaybackEncodeProfile.Create(encodedWidth, encodedHeight,
+                request.FpsNumerator, request.FpsDenominator, false, PlaybackEncoderSelection.Mf, request.QuantizerOffset) : null;
+            GpuEncodeRequest? nativeEncoding = request.GpuEncoding ?? (mfProfile is null ? null : new(mfProfile.Encoder));
             if (hdrTerminal && !capabilities.Has("hdr-terminal-affine-v2"))
                 throw new InvalidDataException("Renderer does not support affine HDR capture at an effect terminal.");
             if (request.HdrLowerBound != 0 && !capabilities.Has("hdr-terminal-affine-v2"))
@@ -305,7 +322,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 streamRequest = request with { Width = sampleWidth, Height = sampleHeight, FrameSampleWidth = sampleWidth };
             }
             manifest["native_frame_transport"] = nativeResize ? "resized_rgba" : nativeSamples ? "sampled_rgba" : sparseInput ? "sparse_rgba" : "full_rgba";
-            if (request.GpuEncoding is { } encoding)
+            if (nativeEncoding is { } encoding)
             {
                 if (encodeSizeRequested && !capabilities.Has("gpu-encode-resize-v1"))
                     throw new GpuEncodeUnavailableException("GPU encode initialization: renderer cannot resize texture captures on the GPU.");
@@ -327,8 +344,10 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                     RetainFrames: request.RetainFrames ?? [], encoding.CrossfadeFrames, encoding.RetainLoopWindow,
                     CropX: encoding.Crop?.X ?? 0, CropY: encoding.Crop?.Y ?? 0,
                     CropWidth: encoding.Crop?.Width ?? (int)request.Width, CropHeight: encoding.Crop?.Height ?? (int)request.Height,
-                    ResizeWidth: encodeSizeRequested ? encodeWidth : null, ResizeHeight: encodeSizeRequested ? encodeHeight : null,
-                    PadWidth: request.EncodePadding?.Width, PadHeight: request.EncodePadding?.Height) };
+                    ResizeWidth: encodeSizeRequested && (!nativeMf || mfResizing) ? encodeWidth : null,
+                    ResizeHeight: encodeSizeRequested && (!nativeMf || mfResizing) ? encodeHeight : null,
+                    PadWidth: request.EncodePadding?.Width, PadHeight: request.EncodePadding?.Height,
+                    MfQuality: mfProfile?.MediaFoundationQuality) };
             }
             string jobPath = Path.Combine(output, "renderer-job.json");
             await WriteJsonAsync(jobPath, JsonSerializer.SerializeToNode(job, JsonOptions)!, cancellationToken);
@@ -434,7 +453,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             var phase = new JsonObject();
             long phaseStart = Stopwatch.GetTimestamp();
             void Phase(string name) { phase[name] = Math.Round(Stopwatch.GetElapsedTime(phaseStart).TotalSeconds, 3); phaseStart = Stopwatch.GetTimestamp(); }
-            if (request.GpuEncoding is not null)
+            if (nativeEncoding is not null)
             {
                 manifest["encoder_command"] = new JsonObject { ["executable"] = tools.Renderer,
                     ["gpu_encode"] = JsonSerializer.SerializeToNode(job.GpuEncode, JsonOptions) };
@@ -455,7 +474,22 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                 }
                 catch (IOException error)
                 {
-                    throw RendererFailure(Path.Combine(renderDirectory, "result.json"), error.Message, error);
+                    IOException failure = RendererFailure(Path.Combine(renderDirectory, "result.json"), error.Message, error);
+                    if (nativeMf && failure is GpuEncodeUnavailableException)
+                    {
+                        // A hardware MFT may reject a shared D3D11 surface even though it accepts
+                        // CPU NV12 (observed on the desktop's multi-adapter MF selection).
+                        manifest["status"] = "failed";
+                        manifest["error"] = failure.Message;
+                        await WriteJsonAsync(manifestPath, manifest, CancellationToken.None);
+                        string diagnostic = Path.TrimEndingDirectorySeparator(output) + ".mf-gpu-failed-" + Guid.NewGuid().ToString("N");
+                        Directory.Move(output, diagnostic);
+                        JsonObject fallback = await RenderCoreAsync(request, progress, cancellationToken, allowNativeMf: false);
+                        fallback["native_mf_fallback"] = new JsonObject { ["reason"] = failure.Message, ["diagnostic_directory"] = diagnostic };
+                        await WriteJsonAsync(manifestPath, fallback, cancellationToken);
+                        return fallback;
+                    }
+                    throw failure;
                 }
                 Phase("gpu_pipeline");
                 File.Move(Path.Combine(renderDirectory, "gpu-video.mp4"), partialVideo);
@@ -595,17 +629,17 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             ConfirmRenderOptions(request, nativeResult);
             ulong gpuReadbacks = (ulong)(request.RetainFrames?.Length ?? 0) +
                 (request.CollectAlphaBounds && request.RetainFrames?.Contains(0UL) != true ? 1UL : 0UL);
-            if (request.GpuEncoding is { RetainLoopWindow: true } windowRequest)
+            if (nativeEncoding is { RetainLoopWindow: true } windowRequest)
                 gpuReadbacks = 2UL * windowRequest.CrossfadeFrames + (ulong)(request.RetainFrames?.Count(
                     index => index >= windowRequest.CrossfadeFrames && index < encodedFrames) ?? 0);
-            if (request.GpuEncoding is { } expectedGpu && (nativeResult.GpuEncoded != true ||
+            if (nativeEncoding is { } expectedGpu && (nativeResult.GpuEncoded != true ||
                 nativeResult.ReadbackFrames != gpuReadbacks || nativeResult.GpuEncoder != expectedGpu.Codec ||
                 nativeResult.GpuPackedAlpha != (request.PixelPacking == "rgba_side_by_side")))
                 throw new InvalidDataException("Renderer did not confirm the GPU encoding path.");
-            if (request.GpuEncoding is not null)
+            if (nativeEncoding is not null)
             {
-                if (encodeSizeRequested && (encodeWidth != (uint)(request.GpuEncoding.Crop?.Width ?? (int)request.Width) ||
-                    encodeHeight != (uint)(request.GpuEncoding.Crop?.Height ?? (int)request.Height)))
+                if (encodeSizeRequested && (encodeWidth != (uint)(nativeEncoding.Crop?.Width ?? (int)request.Width) ||
+                    encodeHeight != (uint)(nativeEncoding.Crop?.Height ?? (int)request.Height)))
                 {
                     JsonObject? resize = nativeResult.GpuCapture?.Resize;
                     if (resize is null || resize["width"]?.GetValue<uint>() != encodeWidth || resize["height"]?.GetValue<uint>() != encodeHeight ||
@@ -624,29 +658,29 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
                         throw new InvalidDataException("Renderer did not confirm the requested GPU edge padding.");
                     manifest["gpu_padding"] = observed.DeepClone();
                 }
-                if (request.GpuEncoding.CrossfadeFrames != 0 || request.GpuEncoding.Crop is not null)
+                if (nativeEncoding.CrossfadeFrames != 0 || nativeEncoding.Crop is not null)
                 {
-                    CacheRegion expectedCrop = request.GpuEncoding.Crop ?? new((int)request.Width, (int)request.Height,
+                    CacheRegion expectedCrop = nativeEncoding.Crop ?? new((int)request.Width, (int)request.Height,
                         0, 0, (int)request.Width, (int)request.Height);
                     if (!JsonNode.DeepEquals(nativeResult.GpuCapture?.Crop, JsonSerializer.SerializeToNode(expectedCrop, JsonOptions)))
                         throw new InvalidDataException("Renderer did not confirm the GPU crop.");
                     manifest["gpu_crop"] = nativeResult.GpuCapture!.Crop!.DeepClone();
                 }
-                if (request.GpuEncoding.CrossfadeFrames > 0)
+                if (nativeEncoding.CrossfadeFrames > 0)
                 {
                     var crossfade = nativeResult.GpuCapture?.LoopCrossfade?.DeepClone().AsObject();
                     if (crossfade?["status"]?.GetValue<string>() != "applied" ||
-                        crossfade["crossfade_frames"]?.GetValue<uint>() != request.GpuEncoding.CrossfadeFrames ||
+                        crossfade["crossfade_frames"]?.GetValue<uint>() != nativeEncoding.CrossfadeFrames ||
                         crossfade["loop_frames"]?.GetValue<ulong>() != encodedFrames)
                         throw new InvalidDataException("Renderer did not confirm GPU loop blending and packet assembly.");
                     manifest["loop_crossfade"] = crossfade;
                 }
-                if (request.GpuEncoding.RetainLoopWindow)
+                if (nativeEncoding.RetainLoopWindow)
                 {
                     var window = nativeResult.GpuCapture?.LoopWindow?.DeepClone().AsObject()
                         ?? throw new InvalidDataException("Renderer omitted the original loop window.");
                     string path = Path.Combine(renderDirectory, "loop-window.rgba");
-                    uint count = request.GpuEncoding.CrossfadeFrames;
+                    uint count = nativeEncoding.CrossfadeFrames;
                     if (window["width"]?.GetValue<uint>() != request.Width || window["height"]?.GetValue<uint>() != request.Height ||
                         window["crossfade_frames"]?.GetValue<uint>() != count || window["loop_frames"]?.GetValue<ulong>() != encodedFrames ||
                         window["frame_count"]?.GetValue<ulong>() != 2UL * count ||
@@ -698,7 +732,7 @@ public sealed partial class NativeRenderRunner(NativeTools tools)
             progress?.Report(new("validating", null, "Checking encoded frame count and rational timing."));
             // The input frame sequence and successful encoder exit are already known.
             // Check MP4 metadata; decode for counting only when its declaration is inconsistent.
-            bool nativePacketCount = request.GpuEncoding is not null &&
+            bool nativePacketCount = nativeEncoding is not null &&
                 nativeResult.GpuCapture?.EncodedPackets == encodedFrames;
             string colorEntries = request.PlaybackEncoderKind is null && request.GpuEncoding is null ? "" : ",pix_fmt,color_space,color_range";
             EncodedStream verified = await VerifyEncoded.ProbeAsync(ff, finalVideo,

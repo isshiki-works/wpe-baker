@@ -126,8 +126,10 @@ internal sealed record PlaybackEncodeProfile(string Encoder, string Preset, stri
             .ToString(CultureInfo.InvariantCulture);
 
     /// <summary>MF 的质量档位，越大越好，取自 MfQualityLadder；体积预算每 +1 量化值降 2（MF 的 quality 与 QP 没有公开换算，编码后按实际字节再补）。</summary>
-    private string StepMfQuality() =>
-        Math.Max(1, MfQualityLadder[Math.Clamp(QualityStep, 0, MfQualityLadder.Length - 1)] - 2 * SizeOffset).ToString(CultureInfo.InvariantCulture);
+    internal int MediaFoundationQuality =>
+        Math.Max(1, MfQualityLadder[Math.Clamp(QualityStep, 0, MfQualityLadder.Length - 1)] - 2 * SizeOffset);
+
+    private string StepMfQuality() => MediaFoundationQuality.ToString(CultureInfo.InvariantCulture);
 
     internal string[] OutputArguments(uint numerator, uint denominator, string output) =>
     [

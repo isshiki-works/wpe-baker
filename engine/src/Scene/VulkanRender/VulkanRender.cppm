@@ -156,6 +156,7 @@ struct GpuEncodeOptions {
     std::string codec { "h264_vulkan" };
     bool packed_alpha { false };
     int qp { 18 };
+    int mf_quality { 80 };
     std::uint32_t fps_num { 30 }, fps_den { 1 };
     std::uint64_t first_frame { 0 }, frames { 0 };
     std::uint64_t encoded_frames { 0 };

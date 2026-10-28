@@ -133,404 +133,59 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
             var runner = new NativeRenderRunner(tools);
             (string playbackKind, string? playbackFallback) =
                 await runner.ResolvePlaybackEncoderAsync(request.PlaybackEncoder, request.DeviceUuid ?? settings.DeviceUuid, output, cancellationToken);
-            foreach (JsonObject cache in caches.OfType<JsonObject>())
+            int groupParallel = Math.Clamp(request.GroupParallel == 0 &&
+                playbackKind is PlaybackEncoderSelection.Vulkan or PlaybackEncoderSelection.Mf
+                ? 3 : request.GroupParallel, 1, caches.Count);
+            result["group_parallel"] = groupParallel;
+            // Clone before starting workers: neither project readers nor mutable JSON cross worker boundaries.
+            var inputs = caches.OfType<JsonObject>().Select(cache => (
+                Request: request with { Plan = plan.DeepClone().AsObject() },
+                Cache: cache.DeepClone().AsObject(), Runtime: runtime.DeepClone().AsObject())).ToArray();
+            var captures = new PrefixCapture[inputs.Length];
+            if (groupParallel > 1)
+            {
+                result["prefix_capture_timing_basis"] = "master_render measures the entire parallel prefix batch, including source preparation, rendering, quality, seam and hardware decode checks; worker stage durations are not added to exclusive stages.";
+                using (timing.Measure(StageTiming.MasterRender))
+                    // Parallel.ForEachAsync cancels peers on failure and joins every worker before returning.
+                    await Parallel.ForEachAsync(Enumerable.Range(0, inputs.Length),
+                        new ParallelOptions { MaxDegreeOfParallelism = groupParallel, CancellationToken = cancellationToken },
+                        async (index, token) =>
+                        {
+                            var input = inputs[index];
+                            captures[index] = await CapturePrefixAsync(input.Request, input.Cache, input.Runtime,
+                                playbackKind, playbackFallback, new StageTiming(), progress, token);
+                        });
+                foreach (PrefixCapture capture in captures) timing.AddMasterBreakdown(capture.Rendered);
+            }
+            for (int index = 0; index < inputs.Length; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                int owner = cache["owner_layer_id"]!.GetValue<int>(), prefix = cache["prefix_effect_count"]!.GetValue<int>();
-                int? terminalId = SceneGraph.Int(cache["terminal_effect_id"]), terminalOrdinal = SceneGraph.Int(cache["terminal_effect_ordinal"]);
-                JsonObject? radiance = (plan["hdr_radiance_closure"]?["groups"] as JsonArray ?? []).OfType<JsonObject>()
-                    .FirstOrDefault(group => group["group_id"]?.GetValue<string>() == $"effect_prefix_{owner}");
-                double hdrScale = radiance?["capture_scale"]?.GetValue<double>() ?? 1;
-                double hdrLowerBound = radiance?["capture_lower_bound"]?.GetValue<double>() ?? 0;
-                bool hdrSignedSqrt = radiance?["capture_scale"] is not null;
-                JsonObject loop = EffectPrefixPlanner.AnalyzeIndexedPrefix(pristine, source, settings.Assets, runtime, snapshot,
-                    owner, prefix, settings, projection, null);
-                if (loop["unresolved"] is JsonArray { Count: > 0 } || loop["candidates"] is not JsonArray { Count: > 0 })
-                    throw new InvalidDataException($"Effect-prefix owner {owner} has no complete source-derived period.");
-                ulong periodFrames = loop["candidates"]!.AsArray()[0]!["frames"]!.GetValue<ulong>();
-                ulong frames = preview ? Math.Min(periodFrames, request.ProbeFrames) : periodFrames;
-                if (preview) comparisonLimit = Math.Min(comparisonLimit, frames);
-                string cacheOutput = Path.Combine(output, "prefix-" + owner);
-                string captureProject = Path.Combine(cacheOutput, "capture-source");
-                JsonArray swayPatches;
-                using (timing.Measure(StageTiming.SourceCapture))
-                    swayPatches = await PrepareCaptureSourceAsync(captureProject, source, settings.Assets,
-                        pristine, snapshot, loop, cancellationToken);
-                if (swayPatches.Count > 0)
+                var input = inputs[index];
+                PrefixCapture capture = groupParallel > 1 ? captures[index]
+                    : await CapturePrefixAsync(input.Request, input.Cache, input.Runtime, playbackKind, playbackFallback,
+                        timing, progress, cancellationToken);
+                JsonObject group = capture.Report["groups"]!.AsArray().OfType<JsonObject>().Single();
+                if (preview) comparisonLimit = Math.Min(comparisonLimit, group["frames"]!.GetValue<ulong>());
+                if (capture.Assembly is { } assembly)
                 {
-                    JsonArray recorded = (result["sway_shader_patches"] ??= new JsonArray()).AsArray();
-                    foreach (JsonObject patch in swayPatches.OfType<JsonObject>())
+                    using (timing.Measure(StageTiming.ProjectAssembly))
+                        await EffectPrefixCache.ApplyAsync(source, pristine, candidateScene, candidateProject,
+                            assembly.Owner, assembly.Prefix, assembly.Video, assembly.StoredWidth, assembly.StoredHeight,
+                            false, cancellationToken, assembly.SourceWidth, assembly.SourceHeight, assembly.PackedAlpha,
+                            assembly.PaddedContent, assembly.HdrScale, assembly.HdrLowerBound, assembly.HdrSignedSqrt);
+                    encodedLoops.Add(assembly.Owner, group["period"]!.DeepClone().AsObject());
+                }
+                // Only this ordered lane mutates the bake report and assembled scene.
+                foreach ((string key, JsonNode? value) in capture.Report)
+                {
+                    if (value is JsonArray items)
                     {
-                        patch["owner_layer_id"] = owner;
-                        recorded.Add(patch.DeepClone());
+                        JsonArray target = (result[key] ??= new JsonArray()).AsArray();
+                        foreach (JsonNode? item in items) target.Add(item?.DeepClone());
                     }
+                    else result[key] = value?.DeepClone();
                 }
-                var target = new RenderCaptureSelection(owner, terminalId, EffectOrdinal: terminalOrdinal, EffectTerminal: true,
-                    ExactExtent: true, ForceVisibleOwner: cache["preserve_external_visibility"]?.GetValue<bool>() == true ? true : null);
-                JsonObject probe;
-                using (timing.Measure(StageTiming.MasterRender))
-                probe = await runner.RenderRawAsync(new(captureProject, settings.Assets, Path.Combine(cacheOutput, "metadata"), 64, 64,
-                    settings.FpsNumerator, settings.FpsDenominator, 1, Seed: 17, CaptureTarget: target with { ExactExtent = false },
-                    UserProperties: snapshot, DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, TraceScene: true,
-                    HdrScale: hdrSignedSqrt ? 1 : null), cancellationToken);
-                JsonObject captureSource = probe["native_result"]?["capture_source"]?.AsObject()
-                    ?? throw new InvalidDataException("Terminal metadata probe omitted its capture source.");
-                // 尺寸、编码都以捕获点确实是这一层自己的目标为前提；落到共用缓冲时录到的是整幅场景，直接拒绝，不做完整捕获。
-                JsonObject captureTarget = EffectPrefixCaptureTarget.Evaluate(probe["native_result"]!.AsObject(), owner,
-                    terminalId, EffectPrefixCaptureTarget.LayerName(pristine, owner), terminalOrdinal);
-                if (captureTarget["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus)
-                {
-                    result["groups"]!.AsArray().Add(new JsonObject { ["id"] = "effect-prefix-" + owner, ["status"] = "rejected_capture_target",
-                        ["owner_layer_id"] = owner, ["frames"] = frames, ["capture_target"] = captureTarget, ["period"] = loop });
-                    result["status"] = "candidate_rejected_capture_target";
-                    result["reason"] = captureTarget["reason"]!.DeepClone();
-                    result["reason_localized"] = captureTarget["reason_localized"]!.DeepClone();
-                    await Save(); return result;
-                }
-                uint sourceWidth = captureSource["width"]?.GetValue<uint>() ?? 0, sourceHeight = captureSource["height"]?.GetValue<uint>() ?? 0;
-                if (sourceWidth == 0 || sourceHeight == 0) throw new InvalidDataException("Terminal metadata probe reported an invalid capture extent.");
-                byte[] probePixels = await File.ReadAllBytesAsync(probe["rgba_path"]!.GetValue<string>(), cancellationToken);
-                if (probePixels.Length != 64 * 64 * 4) throw new InvalidDataException("The terminal metadata probe has an unexpected pixel count.");
-                bool packedAlpha = false;
-                for (int pixel = 3; pixel < probePixels.Length; pixel += 4) packedAlpha |= probePixels[pixel] != byte.MaxValue;
-                if (!packedAlpha && (sourceWidth != 64 || sourceHeight != 64))
-                {
-                    // A reduced probe can miss a thin transparent edge. Decide RGB versus
-                    // packed alpha on one native-size frame before starting the full capture.
-                    JsonObject opacityProbe;
-                    using (timing.Measure(StageTiming.MasterRender))
-                    opacityProbe = await runner.RenderRawAsync(new(captureProject, settings.Assets,
-                        Path.Combine(cacheOutput, "opacity"), sourceWidth, sourceHeight,
-                        settings.FpsNumerator, settings.FpsDenominator, 1, Seed: 17, CaptureTarget: target,
-                        UserProperties: snapshot, DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid,
-                        HdrScale: radiance?["capture_scale"] is not null ? hdrScale : null,
-                        HdrLowerBound: hdrLowerBound, HdrSignedSqrt: hdrSignedSqrt), cancellationToken);
-                    string opacityPath = opacityProbe["rgba_path"]!.GetValue<string>();
-                    byte[] opacityPixels = await File.ReadAllBytesAsync(opacityPath, cancellationToken);
-                    for (int pixel = 3; pixel < opacityPixels.Length; pixel += 4)
-                        if (opacityPixels[pixel] != byte.MaxValue) { packedAlpha = true; break; }
-                    if (!request.KeepIntermediates)
-                        TemporaryCaptureFiles.Delete(result, Path.GetDirectoryName(opacityPath)!, Path.GetFileName(opacityPath));
-                }
-                bool puppetAtlas = source.ReadJson(cache["source_image"]!.GetValue<string>()).ContainsKey("puppet");
-                (uint encodeWidth, uint encodeHeight) = puppetAtlas
-                    ? FitAtlas(sourceWidth, sourceHeight, settings, plan)
-                    : Fit(sourceWidth, sourceHeight, settings.Width, settings.Height);
-                (encodeWidth, encodeHeight) = HardwareDecodeDimensions.FitCeiling(encodeWidth, encodeHeight, packedAlpha);
-                // 编码尺寸与透明打包在这里定稿：越硬解上限已在上一行等比缩进上限，这里只剩过小时居中补边。
-                HardwareDecodeDimensions.Plan decodePlan = HardwareDecodeDimensions.Evaluate(encodeWidth, encodeHeight, packedAlpha,
-                    settings.FpsNumerator, settings.FpsDenominator);
-                uint storedWidth = decodePlan.StoredWidth, storedHeight = decodePlan.StoredHeight;
-                // 上下并排也走补边描述：解码端要从 PaddedWidth 得知每半幅宽，才能认出打包方向。
-                EncodedContentRegion? paddedContent = decodePlan.Padded || decodePlan.Vertical
-                    ? new((int)decodePlan.PaddedWidth, (int)decodePlan.PaddedHeight, (int)decodePlan.OffsetX, (int)decodePlan.OffsetY,
-                        (int)encodeWidth, (int)encodeHeight)
-                    : null;
-                JsonObject rendered;
-                string renderOutput = Path.Combine(cacheOutput, "encoded");
-                string? encoderFallback = playbackFallback;
-                var softwareRender = new RenderRequest(captureProject, settings.Assets, renderOutput, sourceWidth, sourceHeight,
-                    settings.FpsNumerator, settings.FpsDenominator, checked(frames + 1), Seed: 17, CaptureTarget: target, UserProperties: snapshot,
-                    EncodedFrames: frames, RetainFrames: LoopClosureCheck.ReferenceFrameIndices(frames),
-                    DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, TraceScene: true, RequireOpaquePixels: !packedAlpha,
-                    PixelPacking: packedAlpha ? "rgba_side_by_side" : "rgb", EncodeWidth: encodeWidth, EncodeHeight: encodeHeight,
-                    HdrScale: radiance?["capture_scale"] is not null ? hdrScale : null,
-                    HdrLowerBound: hdrLowerBound, HdrSignedSqrt: hdrSignedSqrt,
-                    OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(loop, new HashSet<int> { owner }),
-                    EncodePadding: paddedContent is null ? null
-                        : new(decodePlan.PaddedWidth, decodePlan.PaddedHeight, decodePlan.OffsetX, decodePlan.OffsetY));
-                // Non-Vulkan hardware encoders must also reach prefix captures. Previously auto
-                // successfully selected MF on Intel, then this path silently encoded with libx264.
-                RenderRequest renderRequest = !decodePlan.Vertical &&
-                    playbackKind is not PlaybackEncoderSelection.Vulkan and not PlaybackEncoderSelection.Software
-                    ? softwareRender with { PlaybackEncoderKind = playbackKind }
-                    : softwareRender;
-                string[] gpuCodecs = [];
-                bool gpuEdgePadding = paddedContent is { OffsetX: 0, OffsetY: 0 } content && !decodePlan.Vertical &&
-                    content.PaddedWidth - content.Width <= 1 && content.PaddedHeight - content.Height <= 1;
-                if (playbackKind == PlaybackEncoderSelection.Vulkan && (paddedContent is null || gpuEdgePadding))
-                {
-                    bool resize = encodeWidth != sourceWidth || encodeHeight != sourceHeight;
-                    string baseline = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
-                        storedWidth, storedHeight, settings.FpsNumerator, settings.FpsDenominator), PlaybackEncoderSelection.Vulkan);
-                    gpuCodecs = [.. PlaybackEncoderSelection.PreferredGpuCodecs(request.DeviceUuid ?? settings.DeviceUuid)
-                        .Append(baseline).Distinct(StringComparer.Ordinal)];
-                    renderRequest = softwareRender with { GpuEncoding = new(gpuCodecs[0], Qp: 12, RetainQualitySamples: true),
-                        RequireOpaquePixels = false, CollectAlphaBounds = !packedAlpha,
-                        EncodeWidth = resize ? encodeWidth : null, EncodeHeight = resize ? encodeHeight : null };
-                }
-                else if (playbackKind == PlaybackEncoderSelection.Vulkan)
-                    encoderFallback ??= "Vulkan prefix encoding supports only horizontal packing with one-pixel edge padding; using the existing software path.";
-                else if (decodePlan.Vertical && playbackKind != PlaybackEncoderSelection.Software)
-                    encoderFallback ??= "Hardware prefix quality comparison requires horizontal packing; using the existing software path for vertical packing.";
-                JsonObject? earlyHardware = null;
-                try
-                {
-                    RenderRequest firstGpuRequest = renderRequest;
-                    // 与分组源周期路线一样多渲 1 帧：编码只取前 P 帧，第 0、P−1、P 帧原帧留作闭合检查与接缝参照。
-                    // 编码尺寸（Fit/FitAtlas）只由捕获范围与投影决定，与帧数无关。
-                    using (timing.Measure(StageTiming.MasterRender))
-                    {
-                        // GPU 成品先过画质门：不过降 QP 在 GPU 上重渲一次，还不过与编码器初始化失败一样按软件路线重渲。
-                        async Task<bool> GpuQualityPassesAsync()
-                        {
-                            string qualityName = renderRequest.GpuEncoding is { } selectedGpu
-                                ? $"{selectedGpu.Codec}-qp{selectedGpu.Qp}" : renderRequest.PlaybackEncoderKind!;
-                            string qualityOutput = Path.Combine(cacheOutput, $"quality-{qualityName}");
-                            Directory.CreateDirectory(qualityOutput);
-                            JsonObject gate = await runner.GpuPlaybackQualityAsync(rendered,
-                                rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4"),
-                                new((int)sourceWidth, (int)sourceHeight, 0, 0, (int)sourceWidth, (int)sourceHeight),
-                                packedAlpha, qualityOutput, cancellationToken);
-                            rendered["playback_quality_gate"] = gate;
-                            return gate["passed"]?.GetValue<bool>() == true;
-                        }
-                        for (int codecIndex = 0; ;)
-                        {
-                            try
-                            {
-                                rendered = await runner.RenderAsync(renderRequest, progress, cancellationToken);
-                                if (renderRequest.GpuEncoding is { } gpu)
-                                {
-                                    if (!await GpuQualityPassesAsync())
-                                    {
-                                        renderOutput = Path.Combine(cacheOutput, $"encoded-{gpu.Codec}-qp{gpu.Qp - 6}");
-                                        renderRequest = renderRequest with { OutputDirectory = renderOutput, GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
-                                        rendered = await runner.RenderAsync(renderRequest, progress, cancellationToken);
-                                        if (!await GpuQualityPassesAsync())
-                                            throw new GpuEncodeUnavailableException($"GPU playback quality gate failed for {gpu.Codec} at QP {gpu.Qp} and {gpu.Qp - 6}.");
-                                    }
-                                    string videoPath = rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4");
-                                    if (new FileInfo(videoPath).Length is long bytes && bytes > EmbeddedVideoBudget.MaximumBytes)
-                                    {
-                                        encoderFallback = NativeRenderRunner.HardwareOverLimitReason(gpu.Codec, bytes);
-                                        renderOutput = Path.Combine(cacheOutput, "encoded-software");
-                                        rendered = await runner.RenderAsync(softwareRender with { OutputDirectory = renderOutput }, progress, cancellationToken);
-                                        break;
-                                    }
-                                    if (codecIndex + 1 < gpuCodecs.Length)
-                                    {
-                                        using (timing.Measure(StageTiming.HardwareDecodeCheck))
-                                            earlyHardware = await runner.ProbeHardwareDecodeAsync(videoPath,
-                                                Path.Combine(cacheOutput, $"hardware-decode-{gpu.Codec}"), Math.Min(frames, 5),
-                                                cancellationToken, request.DeviceUuid ?? settings.DeviceUuid);
-                                        if (earlyHardware["all_adapters_passed"]?.GetValue<bool>() != true)
-                                            throw new GpuEncodeUnavailableException($"{gpu.Codec} did not pass hardware decoding on this machine's playback adapter.");
-                                    }
-                                }
-                                else if (renderRequest.PlaybackEncoderKind is not null)
-                                {
-                                    if (!await GpuQualityPassesAsync())
-                                        throw new GpuEncodeUnavailableException($"{renderRequest.PlaybackEncoderKind} did not pass the playback quality gate.");
-                                    if (new FileInfo(Path.Combine(renderOutput, "preview.mp4")).Length > EmbeddedVideoBudget.MaximumBytes)
-                                        throw new GpuEncodeUnavailableException($"{renderRequest.PlaybackEncoderKind} exceeded the embedded video size budget.");
-                                    earlyHardware = await runner.ProbeHardwareDecodeAsync(Path.Combine(renderOutput, "preview.mp4"),
-                                        Path.Combine(cacheOutput, $"hardware-decode-{renderRequest.PlaybackEncoderKind}"), Math.Min(frames, 5),
-                                        cancellationToken, request.DeviceUuid ?? settings.DeviceUuid);
-                                    if (earlyHardware["all_adapters_passed"]?.GetValue<bool>() != true)
-                                        throw new GpuEncodeUnavailableException($"{renderRequest.PlaybackEncoderKind} did not pass hardware decoding on this machine's playback adapter.");
-                                }
-                                break;
-                            }
-                            catch (GpuEncodeUnavailableException error) when ((renderRequest.GpuEncoding is not null ||
-                                renderRequest.PlaybackEncoderKind is not null) && !cancellationToken.IsCancellationRequested)
-                            {
-                                encoderFallback = error.Message;
-                                earlyHardware = null;
-                                if (renderRequest.GpuEncoding is not null && ++codecIndex < gpuCodecs.Length)
-                                {
-                                    renderOutput = Path.Combine(cacheOutput, $"encoded-{gpuCodecs[codecIndex]}");
-                                    renderRequest = firstGpuRequest with { OutputDirectory = renderOutput,
-                                        GpuEncoding = firstGpuRequest.GpuEncoding! with { Codec = gpuCodecs[codecIndex] } };
-                                    continue;
-                                }
-                                renderOutput = Path.Combine(cacheOutput, "encoded-software");
-                                rendered = await runner.RenderAsync(softwareRender with { OutputDirectory = renderOutput }, progress, cancellationToken);
-                                break;
-                            }
-                        }
-                    }
-                }
-                catch (Exception error) when (!packedAlpha && !cancellationToken.IsCancellationRequested &&
-                                              NativeRenderRunner.OpaquePixelEvidence(error) is { } nonOpaque)
-                {
-                    // 首帧不透明不代表完整动画始终不透明；后续帧变化仍按拒绝收尾，不丢弃透明度。
-                    (JsonObject group, Message reason) = OpaqueCaptureRejection(pristine, owner, terminalId,
-                        frames, sourceWidth, sourceHeight, loop, nonOpaque, terminalOrdinal);
-                    result["groups"]!.AsArray().Add(group);
-                    result["status"] = "candidate_rejected_opaque_capture";
-                    reason.Write(result, "reason");
-                    await Save(); return result;
-                }
-                timing.AddMasterBreakdown(rendered);
-                bool gpuDirect = rendered["native_frame_transport"]?.GetValue<string>() == "gpu_nv12";
-                string actualEncoder = gpuDirect ? PlaybackEncoderSelection.Vulkan
-                    : rendered["request"]?["playback_encoder_kind"]?.GetValue<string>() ?? PlaybackEncoderSelection.Software;
-                var encodeInfo = new JsonObject { ["encoder_used"] = actualEncoder,
-                    ["encoder_fallback_reason"] = encoderFallback, ["encode_seconds"] = null,
-                    ["readback_frames"] = rendered["readback_frames"]?.DeepClone(),
-                    ["readback_bytes"] = rendered["readback_bytes"]?.DeepClone(),
-                    ["gpu_resize"] = rendered["gpu_resize"]?.DeepClone() };
-                // 原帧只为这一次校验存在；缓存目录会随候选保留，不能把几帧原始 RGBA 留在里面。
-                void DeleteRetainedFrames()
-                {
-                    if (!request.KeepIntermediates)
-                        foreach (string path in new[] { rendered["retained_frames"]?["path"]?.GetValue<string>(),
-                            rendered["alpha_bounds"]?["first_frame_rgba_path"]?.GetValue<string>() }.OfType<string>())
-                            TemporaryCaptureFiles.Delete(result, Path.GetDirectoryName(path)!, Path.GetFileName(path));
-                }
-                JsonObject observedRuntime = rendered["native_result"]?.AsObject()
-                    ?? throw new InvalidDataException("The prefix capture omitted its runtime evidence.");
-                // 当前捕获窗口一旦推翻前缀资格，就丢这一层缓存；短预览也不能忽略已经观察到的依赖。
-                JsonObject? rejected = ObservedCaptureRejection(pristine, source, settings, observedRuntime,
-                    runtime, snapshot, projection, owner, prefix, frames, loop, swayPatches);
-                if (rejected is not null)
-                {
-                    DeleteRetainedFrames();
-                    result["groups"]!.AsArray().Add(rejected);
-                    continue;
-                }
-                string video = rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4");
-                long videoBytes = new FileInfo(video).Length;
-                if (videoBytes > EmbeddedVideoBudget.MaximumBytes)
-                {
-                    DeleteRetainedFrames();
-                    string id = "effect-prefix-" + owner;
-                    result["groups"]!.AsArray().Add(new JsonObject { ["id"] = id, ["status"] = "rejected_embedded_video_size",
-                        ["owner_layer_id"] = owner, ["frames"] = frames, ["video_path"] = video,
-                        ["video_bytes"] = videoBytes, ["maximum_bytes"] = EmbeddedVideoBudget.MaximumBytes,
-                        ["playback_encode"] = encodeInfo });
-                    result["status"] = EmbeddedVideoBudget.RejectedBakeStatus;
-                    EmbeddedVideoBudgetJson.EncodedRejection(id, videoBytes, frames, settings.FpsNumerator, settings.FpsDenominator)
-                        .Write(result, "reason");
-                    await Save(); return result;
-                }
-                JsonObject seam = new() { ["status"] = "not_performed" };
-                JsonObject? gpuQuality = preview ? rendered["playback_quality_gate"]?.DeepClone().AsObject() : null;
-                if (preview && gpuDirect && !packedAlpha)
-                {
-                    JsonObject bounds = rendered["alpha_bounds"]!.AsObject();
-                    if (bounds["observed_frames"]?.GetValue<ulong>() != frames)
-                        throw new InvalidDataException("GPU opacity evidence does not cover every preview frame.");
-                    byte[] lastFrame = await LoopClosureCheck.ReadRetainedFrameAsync(rendered, frames, cancellationToken);
-                    int minimum = bounds["minimum_alpha"]!.GetValue<int>();
-                    for (int pixel = 3; pixel < lastFrame.Length; pixel += 4) minimum = Math.Min(minimum, lastFrame[pixel]);
-                    rendered["opaque_pixels"] = new JsonObject { ["requested"] = true, ["verified"] = minimum == 255,
-                        ["checked_frames"] = frames + 1, ["checked_pixels"] = checked((ulong)sourceWidth * sourceHeight * (frames + 1)),
-                        ["minimum_alpha"] = minimum,
-                        ["basis"] = "Native-size GPU alpha reduction on preview frames, plus the retained next frame." };
-                }
-                if (!preview) using (timing.Measure(StageTiming.SeamCheck))
-                {
-                    try
-                    {
-                        byte[] firstFrame = await LoopClosureCheck.ReadRetainedFrameAsync(rendered, 0, cancellationToken);
-                        byte[] wrapFrame = await LoopClosureCheck.ReadRetainedFrameAsync(rendered, frames, cancellationToken);
-                        if (gpuDirect && !packedAlpha)
-                        {
-                            JsonObject bounds = rendered["alpha_bounds"]!.AsObject();
-                            if (bounds["observed_frames"]?.GetValue<ulong>() != frames)
-                                throw new InvalidDataException("GPU opacity evidence does not cover every encoded source frame.");
-                            int minimum = bounds["minimum_alpha"]!.GetValue<int>();
-                            // The ordinary unencoded P frame is retained but not GPU-reduced.
-                            for (int pixel = 3; pixel < wrapFrame.Length; pixel += 4) minimum = Math.Min(minimum, wrapFrame[pixel]);
-                            rendered["opaque_pixels"] = new JsonObject { ["requested"] = true, ["verified"] = minimum == 255,
-                                ["checked_frames"] = frames + 1, ["checked_pixels"] = checked((ulong)sourceWidth * sourceHeight * (frames + 1)),
-                                ["minimum_alpha"] = minimum,
-                                ["basis"] = "Native-size GPU alpha reduction on all encoded source frames, plus the retained original P frame." };
-                        }
-                        JsonObject closure = LoopClosureCheck.Evaluate(firstFrame, wrapFrame,
-                            (int)sourceWidth, (int)sourceHeight, withAlpha: packedAlpha, frames, judged: true,
-                            SwayRecurrenceSolver.SpeedLimitScale(settings.Width, settings.Height));
-                        if (!request.KeepIntermediates && LoopClosureCheck.Allows(closure))
-                            seam = await EncodedLoopValidator.ValidateAsync(video, tools, frames, settings.FpsNumerator,
-                                settings.FpsDenominator, packedAlpha, closure, (int)encodeWidth * (packedAlpha ? 2 : 1),
-                                (int)encodeHeight, paddedContent, cancellationToken);
-                        else
-                        {
-                            LoopReference reference = await EncodedLoopValidator.FromScaledRenderAsync(tools, rendered, (int)encodeWidth,
-                                (int)encodeHeight, packedAlpha, frames, closure, cancellationToken);
-                            seam = await EncodedLoopValidator.ValidateAsync(video, tools, frames, settings.FpsNumerator, settings.FpsDenominator,
-                                packedAlpha, reference, paddedContent, cancellationToken);
-                        }
-                        // 门在渲染后就过了（见上面的降 QP 重试）；这里只在接缝过了时记下结果。
-                        if (seam["status"]?.GetValue<string>() == "observed_seam_pass")
-                            gpuQuality = rendered["playback_quality_gate"]?.DeepClone().AsObject();
-                    }
-                    finally { DeleteRetainedFrames(); }
-                }
-                if (preview) DeleteRetainedFrames();
-                JsonObject? seamPreview = null;
-                if (!preview && SeamPreview.ShouldExport(false, false, seam, request.KeepIntermediates))
-                {
-                    progress?.Report(new("exporting_seam_preview", 0, new Message("progress.exporting_seam_preview",
-                        [SeamPreview.WindowFrames(frames, settings.FpsNumerator, settings.FpsDenominator)])));
-                    using (timing.Measure(StageTiming.SeamCheck))
-                    seamPreview = await SeamPreview.ExportOrWarnAsync(result, "effect-prefix-" + owner,
-                        SeamPreview.Outcome(seam["status"]?.GetValue<string>()),
-                        token => runner.ExportSeamPreviewAsync(video, Path.Combine(cacheOutput, SeamPreview.FileName), frames,
-                            settings.FpsNumerator, settings.FpsDenominator, "encoded_video", token), cancellationToken);
-                }
-                JsonObject? opaque = rendered["opaque_pixels"] as JsonObject;
-                // 不透明扫描覆盖渲染器交出的每一帧，包括只作参照、不进编码的第 P 帧。
-                bool opaquePass = packedAlpha || opaque?["requested"]?.GetValue<bool>() == true && opaque["verified"]?.GetValue<bool>() == true &&
-                    opaque["checked_frames"]?.GetValue<ulong>() == frames + 1 && opaque["checked_pixels"]?.GetValue<ulong>() ==
-                    checked((ulong)sourceWidth * sourceHeight * (frames + 1)) && opaque["minimum_alpha"]?.GetValue<int>() == 255;
-                bool seamPassed = preview || seam["status"]?.GetValue<string>() == "observed_seam_pass";
-                JsonObject hardware = earlyHardware ?? new() { ["status"] = "not_performed" };
-                if (seamPassed && gpuQuality?["passed"]?.GetValue<bool>() != false && opaquePass)
-                    if (earlyHardware is null)
-                        using (timing.Measure(StageTiming.HardwareDecodeCheck))
-                            hardware = await runner.ProbeHardwareDecodeAsync(video, Path.Combine(cacheOutput, "hardware-decode"), Math.Min(frames, 5), cancellationToken,
-                                request.DeviceUuid ?? settings.DeviceUuid);
-                string? rejection = !seamPassed ? "seam" : gpuQuality?["passed"]?.GetValue<bool>() == false ? "quality" :
-                    !opaquePass ? "opaque_capture" : hardware["all_adapters_passed"]?.GetValue<bool>() != true ? "hardware_decode" : null;
-                if (rejection is not null)
-                {
-                    var rejectedGroup = new JsonObject { ["id"] = "effect-prefix-" + owner,
-                        ["status"] = "rejected_" + rejection,
-                        ["owner_layer_id"] = owner, ["frames"] = frames, ["source_extent"] = new JsonArray(sourceWidth, sourceHeight),
-                        ["encoded_extent"] = new JsonArray(storedWidth, storedHeight), ["packed_alpha"] = packedAlpha, ["video_path"] = video, ["period"] = loop,
-                        ["capture_target"] = captureTarget, ["hardware_decode_preflight"] = decodePlan.ToJson(),
-                        ["encoded_loop_validation"] = seam, ["hardware_decode"] = hardware, ["opaque_pixels"] = opaque?.DeepClone(),
-                        ["playback_encode"] = encodeInfo, ["playback_quality_gate"] = gpuQuality, ["video_bytes"] = new FileInfo(video).Length };
-                    SeamPreview.Attach(rejectedGroup, seamPreview);
-                    result["groups"]!.AsArray().Add(rejectedGroup);
-                    result["status"] = "candidate_rejected_" + rejection;
-                    bool seamRejected = seam["status"]?.GetValue<string>() != "observed_seam_pass";
-                    if (!seamRejected)
-                        new Message(rejection == "quality" ? "bake.effect_prefix_quality_rejected"
-                            : rejection == "hardware_decode" ? "bake.effect_prefix_hardware_decode_rejected"
-                            : "bake.effect_prefix_opaque_unproven").Write(result, "reason");
-                    else result["reason"] = MessageCatalog.Get("bake.effect_prefix_seam_rejected", MessageCatalog.English, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.English));
-                    if (seamRejected)
-                        result["reason_localized"] = new JsonObject { ["key"] = "bake.effect_prefix_seam_rejected",
-                            ["zh"] = MessageCatalog.Get("bake.effect_prefix_seam_rejected", MessageCatalog.Chinese, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.Chinese)),
-                            ["en"] = result["reason"]!.DeepClone(), ["params"] = new JsonArray() };
-                    await Save(); return result;
-                }
-                using (timing.Measure(StageTiming.ProjectAssembly))
-                    await EffectPrefixCache.ApplyAsync(source, pristine, candidateScene, candidateProject, owner, prefix, video,
-                        storedWidth, storedHeight, false, cancellationToken, sourceWidth, sourceHeight, packedAlpha, paddedContent,
-                        hdrScale, hdrLowerBound, hdrSignedSqrt);
-                var encodedGroup = new JsonObject { ["id"] = "effect-prefix-" + owner, ["status"] = "encoded",
-                    ["owner_layer_id"] = owner, ["frames"] = frames,
-                    ["source_extent"] = new JsonArray(sourceWidth, sourceHeight),
-                    ["encoded_extent"] = new JsonArray(storedWidth, storedHeight), ["logical_encoded_extent"] = new JsonArray(encodeWidth, encodeHeight),
-                    ["sampling_basis"] = puppetAtlas ? "source_atlas_at_projected_canvas_density" : "source_image_fits_output",
-                    ["packed_alpha"] = packedAlpha, ["video_path"] = video, ["period"] = loop, ["capture_target"] = captureTarget,
-                    ["hardware_decode_preflight"] = decodePlan.ToJson(),
-                    ["encoded_loop_validation"] = seam, ["hardware_decode"] = hardware, ["opaque_pixels"] = opaque?.DeepClone(),
-                    ["playback_encode"] = encodeInfo, ["playback_quality_gate"] = gpuQuality, ["video_bytes"] = new FileInfo(video).Length };
-                if (radiance?["capture_scale"] is not null)
-                {
-                    encodedGroup["hdr_capture_scale"] = hdrScale;
-                    encodedGroup["hdr_capture_lower_bound"] = hdrLowerBound;
-                }
-                if (preview) encodedGroup["period_frames"] = periodFrames;
-                SeamPreview.Attach(encodedGroup, seamPreview);
-                result["groups"]!.AsArray().Add(encodedGroup);
-                encodedLoops.Add(owner, loop.DeepClone().AsObject());
+                if (capture.Report["status"] is not null) { await Save(); return result; }
             }
             if (!result["groups"]!.AsArray().OfType<JsonObject>().Any(group => group["status"]?.GetValue<string>() == "encoded"))
             {
@@ -612,6 +267,421 @@ internal sealed class EffectPrefixBakeService(NativeTools tools)
             result["status"] = cancellationToken.IsCancellationRequested ? "cancelled" : "failed";
             result["error_type"] = error.GetType().Name; result["error"] = error.Message; await Save(); throw;
         }
+    }
+
+    private sealed record PrefixAssembly(int Owner, int Prefix, string Video, uint StoredWidth, uint StoredHeight,
+        uint SourceWidth, uint SourceHeight, bool PackedAlpha, EncodedContentRegion? PaddedContent,
+        double HdrScale, double HdrLowerBound, bool HdrSignedSqrt);
+
+    private sealed record PrefixCapture(JsonObject Report, PrefixAssembly? Assembly, JsonObject? Rendered = null);
+
+    /// <summary>One independent prefix, including its original qualification, quality and fallback paths.</summary>
+    private async Task<PrefixCapture> CapturePrefixAsync(HybridBakeRequest request, JsonObject cache, JsonObject runtime,
+        string playbackKind, string? playbackFallback, StageTiming timing, IProgress<RenderProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        JsonObject plan = request.Plan;
+        HybridAnalyzeRequest settings = PlanSettings.Of(plan);
+        using var source = new ProjectSource(plan["source"]!.GetValue<string>());
+        JsonObject pristine = source.ReadJson(source.SceneResource);
+        JsonObject snapshot = plan["snapshot_properties"]!.AsObject();
+        JsonObject projection = plan["projection"] as JsonObject ?? new JsonObject();
+        bool preview = request.ProbeFrames > 0;
+        string output = Path.GetFullPath(request.OutputDirectory);
+        var runner = new NativeRenderRunner(tools);
+        var result = new JsonObject { ["groups"] = new JsonArray() };
+        int owner = cache["owner_layer_id"]!.GetValue<int>(), prefix = cache["prefix_effect_count"]!.GetValue<int>();
+        int? terminalId = SceneGraph.Int(cache["terminal_effect_id"]), terminalOrdinal = SceneGraph.Int(cache["terminal_effect_ordinal"]);
+        JsonObject? radiance = (plan["hdr_radiance_closure"]?["groups"] as JsonArray ?? []).OfType<JsonObject>()
+            .FirstOrDefault(group => group["group_id"]?.GetValue<string>() == $"effect_prefix_{owner}");
+        double hdrScale = radiance?["capture_scale"]?.GetValue<double>() ?? 1;
+        double hdrLowerBound = radiance?["capture_lower_bound"]?.GetValue<double>() ?? 0;
+        bool hdrSignedSqrt = radiance?["capture_scale"] is not null;
+        JsonObject loop = EffectPrefixPlanner.AnalyzeIndexedPrefix(pristine, source, settings.Assets, runtime, snapshot,
+            owner, prefix, settings, projection, null);
+        if (loop["unresolved"] is JsonArray { Count: > 0 } || loop["candidates"] is not JsonArray { Count: > 0 })
+            throw new InvalidDataException($"Effect-prefix owner {owner} has no complete source-derived period.");
+        ulong periodFrames = loop["candidates"]!.AsArray()[0]!["frames"]!.GetValue<ulong>();
+        ulong frames = preview ? Math.Min(periodFrames, request.ProbeFrames) : periodFrames;
+        string cacheOutput = Path.Combine(output, "prefix-" + owner);
+        string captureProject = Path.Combine(cacheOutput, "capture-source");
+        JsonArray swayPatches;
+        using (timing.Measure(StageTiming.SourceCapture))
+            swayPatches = await PrepareCaptureSourceAsync(captureProject, source, settings.Assets,
+                pristine, snapshot, loop, cancellationToken);
+        if (swayPatches.Count > 0)
+        {
+            JsonArray recorded = (result["sway_shader_patches"] ??= new JsonArray()).AsArray();
+            foreach (JsonObject patch in swayPatches.OfType<JsonObject>())
+            {
+                patch["owner_layer_id"] = owner;
+                recorded.Add(patch.DeepClone());
+            }
+        }
+        var target = new RenderCaptureSelection(owner, terminalId, EffectOrdinal: terminalOrdinal, EffectTerminal: true,
+            ExactExtent: true, ForceVisibleOwner: cache["preserve_external_visibility"]?.GetValue<bool>() == true ? true : null);
+        JsonObject probe;
+        using (timing.Measure(StageTiming.MasterRender))
+        probe = await runner.RenderRawAsync(new(captureProject, settings.Assets, Path.Combine(cacheOutput, "metadata"), 64, 64,
+            settings.FpsNumerator, settings.FpsDenominator, 1, Seed: 17, CaptureTarget: target with { ExactExtent = false },
+            UserProperties: snapshot, DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, TraceScene: true,
+            HdrScale: hdrSignedSqrt ? 1 : null), cancellationToken);
+        JsonObject captureSource = probe["native_result"]?["capture_source"]?.AsObject()
+            ?? throw new InvalidDataException("Terminal metadata probe omitted its capture source.");
+        // 尺寸、编码都以捕获点确实是这一层自己的目标为前提；落到共用缓冲时录到的是整幅场景，直接拒绝，不做完整捕获。
+        JsonObject captureTarget = EffectPrefixCaptureTarget.Evaluate(probe["native_result"]!.AsObject(), owner,
+            terminalId, EffectPrefixCaptureTarget.LayerName(pristine, owner), terminalOrdinal);
+        if (captureTarget["status"]?.GetValue<string>() != EffectPrefixCaptureTarget.LayerTargetStatus)
+        {
+            result["groups"]!.AsArray().Add(new JsonObject { ["id"] = "effect-prefix-" + owner, ["status"] = "rejected_capture_target",
+                ["owner_layer_id"] = owner, ["frames"] = frames, ["capture_target"] = captureTarget, ["period"] = loop });
+            result["status"] = "candidate_rejected_capture_target";
+            result["reason"] = captureTarget["reason"]!.DeepClone();
+            result["reason_localized"] = captureTarget["reason_localized"]!.DeepClone();
+            return new(result, null);
+        }
+        uint sourceWidth = captureSource["width"]?.GetValue<uint>() ?? 0, sourceHeight = captureSource["height"]?.GetValue<uint>() ?? 0;
+        if (sourceWidth == 0 || sourceHeight == 0) throw new InvalidDataException("Terminal metadata probe reported an invalid capture extent.");
+        byte[] probePixels = await File.ReadAllBytesAsync(probe["rgba_path"]!.GetValue<string>(), cancellationToken);
+        if (probePixels.Length != 64 * 64 * 4) throw new InvalidDataException("The terminal metadata probe has an unexpected pixel count.");
+        bool packedAlpha = false;
+        for (int pixel = 3; pixel < probePixels.Length; pixel += 4) packedAlpha |= probePixels[pixel] != byte.MaxValue;
+        if (!packedAlpha && (sourceWidth != 64 || sourceHeight != 64))
+        {
+            // A reduced probe can miss a thin transparent edge. Decide RGB versus
+            // packed alpha on one native-size frame before starting the full capture.
+            JsonObject opacityProbe;
+            using (timing.Measure(StageTiming.MasterRender))
+            opacityProbe = await runner.RenderRawAsync(new(captureProject, settings.Assets,
+                Path.Combine(cacheOutput, "opacity"), sourceWidth, sourceHeight,
+                settings.FpsNumerator, settings.FpsDenominator, 1, Seed: 17, CaptureTarget: target,
+                UserProperties: snapshot, DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid,
+                HdrScale: radiance?["capture_scale"] is not null ? hdrScale : null,
+                HdrLowerBound: hdrLowerBound, HdrSignedSqrt: hdrSignedSqrt), cancellationToken);
+            string opacityPath = opacityProbe["rgba_path"]!.GetValue<string>();
+            byte[] opacityPixels = await File.ReadAllBytesAsync(opacityPath, cancellationToken);
+            for (int pixel = 3; pixel < opacityPixels.Length; pixel += 4)
+                if (opacityPixels[pixel] != byte.MaxValue) { packedAlpha = true; break; }
+            if (!request.KeepIntermediates)
+                TemporaryCaptureFiles.Delete(result, Path.GetDirectoryName(opacityPath)!, Path.GetFileName(opacityPath));
+        }
+        bool puppetAtlas = source.ReadJson(cache["source_image"]!.GetValue<string>()).ContainsKey("puppet");
+        (uint encodeWidth, uint encodeHeight) = puppetAtlas
+            ? FitAtlas(sourceWidth, sourceHeight, settings, plan)
+            : Fit(sourceWidth, sourceHeight, settings.Width, settings.Height);
+        (encodeWidth, encodeHeight) = HardwareDecodeDimensions.FitCeiling(encodeWidth, encodeHeight, packedAlpha);
+        // 编码尺寸与透明打包在这里定稿：越硬解上限已在上一行等比缩进上限，这里只剩过小时居中补边。
+        HardwareDecodeDimensions.Plan decodePlan = HardwareDecodeDimensions.Evaluate(encodeWidth, encodeHeight, packedAlpha,
+            settings.FpsNumerator, settings.FpsDenominator);
+        uint storedWidth = decodePlan.StoredWidth, storedHeight = decodePlan.StoredHeight;
+        // 上下并排也走补边描述：解码端要从 PaddedWidth 得知每半幅宽，才能认出打包方向。
+        EncodedContentRegion? paddedContent = decodePlan.Padded || decodePlan.Vertical
+            ? new((int)decodePlan.PaddedWidth, (int)decodePlan.PaddedHeight, (int)decodePlan.OffsetX, (int)decodePlan.OffsetY,
+                (int)encodeWidth, (int)encodeHeight)
+            : null;
+        JsonObject rendered;
+        string renderOutput = Path.Combine(cacheOutput, "encoded");
+        string? encoderFallback = playbackFallback;
+        var softwareRender = new RenderRequest(captureProject, settings.Assets, renderOutput, sourceWidth, sourceHeight,
+            settings.FpsNumerator, settings.FpsDenominator, checked(frames + 1), Seed: 17, CaptureTarget: target, UserProperties: snapshot,
+            EncodedFrames: frames, RetainFrames: LoopClosureCheck.ReferenceFrameIndices(frames),
+            DeviceUuid: request.DeviceUuid ?? settings.DeviceUuid, TraceScene: true, RequireOpaquePixels: !packedAlpha,
+            PixelPacking: packedAlpha ? "rgba_side_by_side" : "rgb", EncodeWidth: encodeWidth, EncodeHeight: encodeHeight,
+            HdrScale: radiance?["capture_scale"] is not null ? hdrScale : null,
+            HdrLowerBound: hdrLowerBound, HdrSignedSqrt: hdrSignedSqrt,
+            OfflineVideoRateOverrides: HybridBakeService.SelectVideoRateOverrides(loop, new HashSet<int> { owner }),
+            EncodePadding: paddedContent is null ? null
+                : new(decodePlan.PaddedWidth, decodePlan.PaddedHeight, decodePlan.OffsetX, decodePlan.OffsetY));
+        // Non-Vulkan hardware encoders must also reach prefix captures. Previously auto
+        // successfully selected MF on Intel, then this path silently encoded with libx264.
+        RenderRequest renderRequest = !decodePlan.Vertical &&
+            playbackKind is not PlaybackEncoderSelection.Vulkan and not PlaybackEncoderSelection.Software
+            ? softwareRender with { PlaybackEncoderKind = playbackKind }
+            : softwareRender;
+        string[] gpuCodecs = [];
+        bool gpuEdgePadding = paddedContent is { OffsetX: 0, OffsetY: 0 } content && !decodePlan.Vertical &&
+            content.PaddedWidth - content.Width <= 1 && content.PaddedHeight - content.Height <= 1;
+        if (playbackKind == PlaybackEncoderSelection.Vulkan && (paddedContent is null || gpuEdgePadding))
+        {
+            bool resize = encodeWidth != sourceWidth || encodeHeight != sourceHeight;
+            string baseline = PlaybackEncodeProfile.HardwareEncoder(PlaybackEncodeProfile.SelectPlaybackEncoder(
+                storedWidth, storedHeight, settings.FpsNumerator, settings.FpsDenominator), PlaybackEncoderSelection.Vulkan);
+            gpuCodecs = [.. PlaybackEncoderSelection.PreferredGpuCodecs(request.DeviceUuid ?? settings.DeviceUuid)
+                .Append(baseline).Distinct(StringComparer.Ordinal)];
+            renderRequest = softwareRender with { GpuEncoding = new(gpuCodecs[0], Qp: 12, RetainQualitySamples: true),
+                RequireOpaquePixels = false, CollectAlphaBounds = !packedAlpha,
+                EncodeWidth = resize ? encodeWidth : null, EncodeHeight = resize ? encodeHeight : null };
+        }
+        else if (playbackKind == PlaybackEncoderSelection.Vulkan)
+            encoderFallback ??= "Vulkan prefix encoding supports only horizontal packing with one-pixel edge padding; using the existing software path.";
+        else if (decodePlan.Vertical && playbackKind != PlaybackEncoderSelection.Software)
+            encoderFallback ??= "Hardware prefix quality comparison requires horizontal packing; using the existing software path for vertical packing.";
+        JsonObject? earlyHardware = null;
+        try
+        {
+            RenderRequest firstGpuRequest = renderRequest;
+            // 与分组源周期路线一样多渲 1 帧：编码只取前 P 帧，第 0、P−1、P 帧原帧留作闭合检查与接缝参照。
+            // 编码尺寸（Fit/FitAtlas）只由捕获范围与投影决定，与帧数无关。
+            using (timing.Measure(StageTiming.MasterRender))
+            {
+                // GPU 成品先过画质门：不过降 QP 在 GPU 上重渲一次，还不过与编码器初始化失败一样按软件路线重渲。
+                async Task<bool> GpuQualityPassesAsync()
+                {
+                    string qualityName = renderRequest.GpuEncoding is { } selectedGpu
+                        ? $"{selectedGpu.Codec}-qp{selectedGpu.Qp}" : renderRequest.PlaybackEncoderKind!;
+                    string qualityOutput = Path.Combine(cacheOutput, $"quality-{qualityName}");
+                    Directory.CreateDirectory(qualityOutput);
+                    JsonObject gate = await runner.GpuPlaybackQualityAsync(rendered,
+                        rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4"),
+                        new((int)sourceWidth, (int)sourceHeight, 0, 0, (int)sourceWidth, (int)sourceHeight),
+                        packedAlpha, qualityOutput, cancellationToken);
+                    rendered["playback_quality_gate"] = gate;
+                    return gate["passed"]?.GetValue<bool>() == true;
+                }
+                for (int codecIndex = 0; ;)
+                {
+                    try
+                    {
+                        rendered = await runner.RenderAsync(renderRequest, progress, cancellationToken);
+                        if (renderRequest.GpuEncoding is { } gpu)
+                        {
+                            if (!await GpuQualityPassesAsync())
+                            {
+                                renderOutput = Path.Combine(cacheOutput, $"encoded-{gpu.Codec}-qp{gpu.Qp - 6}");
+                                renderRequest = renderRequest with { OutputDirectory = renderOutput, GpuEncoding = gpu with { Qp = gpu.Qp - 6 } };
+                                rendered = await runner.RenderAsync(renderRequest, progress, cancellationToken);
+                                if (!await GpuQualityPassesAsync())
+                                    throw new GpuEncodeUnavailableException($"GPU playback quality gate failed for {gpu.Codec} at QP {gpu.Qp} and {gpu.Qp - 6}.");
+                            }
+                            string videoPath = rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4");
+                            if (new FileInfo(videoPath).Length is long bytes && bytes > EmbeddedVideoBudget.MaximumBytes)
+                            {
+                                encoderFallback = NativeRenderRunner.HardwareOverLimitReason(gpu.Codec, bytes);
+                                renderOutput = Path.Combine(cacheOutput, "encoded-software");
+                                rendered = await runner.RenderAsync(softwareRender with { OutputDirectory = renderOutput }, progress, cancellationToken);
+                                break;
+                            }
+                            if (codecIndex + 1 < gpuCodecs.Length)
+                            {
+                                using (timing.Measure(StageTiming.HardwareDecodeCheck))
+                                    earlyHardware = await runner.ProbeHardwareDecodeAsync(videoPath,
+                                        Path.Combine(cacheOutput, $"hardware-decode-{gpu.Codec}"), Math.Min(frames, 5),
+                                        cancellationToken, request.DeviceUuid ?? settings.DeviceUuid);
+                                if (earlyHardware["all_adapters_passed"]?.GetValue<bool>() != true)
+                                    throw new GpuEncodeUnavailableException($"{gpu.Codec} did not pass hardware decoding on this machine's playback adapter.");
+                            }
+                        }
+                        else if (renderRequest.PlaybackEncoderKind is not null)
+                        {
+                            if (!await GpuQualityPassesAsync())
+                                throw new GpuEncodeUnavailableException($"{renderRequest.PlaybackEncoderKind} did not pass the playback quality gate.");
+                            if (new FileInfo(Path.Combine(renderOutput, "preview.mp4")).Length > EmbeddedVideoBudget.MaximumBytes)
+                                throw new GpuEncodeUnavailableException($"{renderRequest.PlaybackEncoderKind} exceeded the embedded video size budget.");
+                            earlyHardware = await runner.ProbeHardwareDecodeAsync(Path.Combine(renderOutput, "preview.mp4"),
+                                Path.Combine(cacheOutput, $"hardware-decode-{renderRequest.PlaybackEncoderKind}"), Math.Min(frames, 5),
+                                cancellationToken, request.DeviceUuid ?? settings.DeviceUuid);
+                            if (earlyHardware["all_adapters_passed"]?.GetValue<bool>() != true)
+                                throw new GpuEncodeUnavailableException($"{renderRequest.PlaybackEncoderKind} did not pass hardware decoding on this machine's playback adapter.");
+                        }
+                        break;
+                    }
+                    catch (GpuEncodeUnavailableException error) when ((renderRequest.GpuEncoding is not null ||
+                        renderRequest.PlaybackEncoderKind is not null) && !cancellationToken.IsCancellationRequested)
+                    {
+                        encoderFallback = error.Message;
+                        earlyHardware = null;
+                        if (renderRequest.GpuEncoding is not null && ++codecIndex < gpuCodecs.Length)
+                        {
+                            renderOutput = Path.Combine(cacheOutput, $"encoded-{gpuCodecs[codecIndex]}");
+                            renderRequest = firstGpuRequest with { OutputDirectory = renderOutput,
+                                GpuEncoding = firstGpuRequest.GpuEncoding! with { Codec = gpuCodecs[codecIndex] } };
+                            continue;
+                        }
+                        renderOutput = Path.Combine(cacheOutput, "encoded-software");
+                        rendered = await runner.RenderAsync(softwareRender with { OutputDirectory = renderOutput }, progress, cancellationToken);
+                        break;
+                    }
+                }
+            }
+        }
+        catch (Exception error) when (!packedAlpha && !cancellationToken.IsCancellationRequested &&
+                                      NativeRenderRunner.OpaquePixelEvidence(error) is { } nonOpaque)
+        {
+            // 首帧不透明不代表完整动画始终不透明；后续帧变化仍按拒绝收尾，不丢弃透明度。
+            (JsonObject group, Message reason) = OpaqueCaptureRejection(pristine, owner, terminalId,
+                frames, sourceWidth, sourceHeight, loop, nonOpaque, terminalOrdinal);
+            result["groups"]!.AsArray().Add(group);
+            result["status"] = "candidate_rejected_opaque_capture";
+            reason.Write(result, "reason");
+            return new(result, null);
+        }
+        timing.AddMasterBreakdown(rendered);
+        bool gpuDirect = rendered["native_frame_transport"]?.GetValue<string>() == "gpu_nv12";
+        string actualEncoder = rendered["request"]?["playback_encoder_kind"]?.GetValue<string>() ??
+            (gpuDirect ? PlaybackEncoderSelection.Vulkan : PlaybackEncoderSelection.Software);
+        var encodeInfo = new JsonObject { ["encoder_used"] = actualEncoder,
+            ["encoder_fallback_reason"] = encoderFallback, ["encode_seconds"] = null,
+            ["readback_frames"] = rendered["readback_frames"]?.DeepClone(),
+            ["readback_bytes"] = rendered["readback_bytes"]?.DeepClone(),
+            ["gpu_resize"] = rendered["gpu_resize"]?.DeepClone() };
+        // 原帧只为这一次校验存在；缓存目录会随候选保留，不能把几帧原始 RGBA 留在里面。
+        void DeleteRetainedFrames()
+        {
+            if (!request.KeepIntermediates)
+                foreach (string path in new[] { rendered["retained_frames"]?["path"]?.GetValue<string>(),
+                    rendered["alpha_bounds"]?["first_frame_rgba_path"]?.GetValue<string>() }.OfType<string>())
+                    TemporaryCaptureFiles.Delete(result, Path.GetDirectoryName(path)!, Path.GetFileName(path));
+        }
+        JsonObject observedRuntime = rendered["native_result"]?.AsObject()
+            ?? throw new InvalidDataException("The prefix capture omitted its runtime evidence.");
+        // 当前捕获窗口一旦推翻前缀资格，就丢这一层缓存；短预览也不能忽略已经观察到的依赖。
+        JsonObject? rejected = ObservedCaptureRejection(pristine, source, settings, observedRuntime,
+            runtime, snapshot, projection, owner, prefix, frames, loop, swayPatches);
+        if (rejected is not null)
+        {
+            DeleteRetainedFrames();
+            result["groups"]!.AsArray().Add(rejected);
+            return new(result, null, rendered);
+        }
+        string video = rendered["video_path"]?.GetValue<string>() ?? Path.Combine(renderOutput, "preview.mp4");
+        long videoBytes = new FileInfo(video).Length;
+        if (videoBytes > EmbeddedVideoBudget.MaximumBytes)
+        {
+            DeleteRetainedFrames();
+            string id = "effect-prefix-" + owner;
+            result["groups"]!.AsArray().Add(new JsonObject { ["id"] = id, ["status"] = "rejected_embedded_video_size",
+                ["owner_layer_id"] = owner, ["frames"] = frames, ["video_path"] = video,
+                ["video_bytes"] = videoBytes, ["maximum_bytes"] = EmbeddedVideoBudget.MaximumBytes,
+                ["playback_encode"] = encodeInfo });
+            result["status"] = EmbeddedVideoBudget.RejectedBakeStatus;
+            EmbeddedVideoBudgetJson.EncodedRejection(id, videoBytes, frames, settings.FpsNumerator, settings.FpsDenominator)
+                .Write(result, "reason");
+            return new(result, null);
+        }
+        JsonObject seam = new() { ["status"] = "not_performed" };
+        JsonObject? gpuQuality = preview ? rendered["playback_quality_gate"]?.DeepClone().AsObject() : null;
+        if (preview && gpuDirect && !packedAlpha)
+        {
+            JsonObject bounds = rendered["alpha_bounds"]!.AsObject();
+            if (bounds["observed_frames"]?.GetValue<ulong>() != frames)
+                throw new InvalidDataException("GPU opacity evidence does not cover every preview frame.");
+            byte[] lastFrame = await LoopClosureCheck.ReadRetainedFrameAsync(rendered, frames, cancellationToken);
+            int minimum = bounds["minimum_alpha"]!.GetValue<int>();
+            for (int pixel = 3; pixel < lastFrame.Length; pixel += 4) minimum = Math.Min(minimum, lastFrame[pixel]);
+            rendered["opaque_pixels"] = new JsonObject { ["requested"] = true, ["verified"] = minimum == 255,
+                ["checked_frames"] = frames + 1, ["checked_pixels"] = checked((ulong)sourceWidth * sourceHeight * (frames + 1)),
+                ["minimum_alpha"] = minimum,
+                ["basis"] = "Native-size GPU alpha reduction on preview frames, plus the retained next frame." };
+        }
+        if (!preview) using (timing.Measure(StageTiming.SeamCheck))
+        {
+            try
+            {
+                byte[] firstFrame = await LoopClosureCheck.ReadRetainedFrameAsync(rendered, 0, cancellationToken);
+                byte[] wrapFrame = await LoopClosureCheck.ReadRetainedFrameAsync(rendered, frames, cancellationToken);
+                if (gpuDirect && !packedAlpha)
+                {
+                    JsonObject bounds = rendered["alpha_bounds"]!.AsObject();
+                    if (bounds["observed_frames"]?.GetValue<ulong>() != frames)
+                        throw new InvalidDataException("GPU opacity evidence does not cover every encoded source frame.");
+                    int minimum = bounds["minimum_alpha"]!.GetValue<int>();
+                    // The ordinary unencoded P frame is retained but not GPU-reduced.
+                    for (int pixel = 3; pixel < wrapFrame.Length; pixel += 4) minimum = Math.Min(minimum, wrapFrame[pixel]);
+                    rendered["opaque_pixels"] = new JsonObject { ["requested"] = true, ["verified"] = minimum == 255,
+                        ["checked_frames"] = frames + 1, ["checked_pixels"] = checked((ulong)sourceWidth * sourceHeight * (frames + 1)),
+                        ["minimum_alpha"] = minimum,
+                        ["basis"] = "Native-size GPU alpha reduction on all encoded source frames, plus the retained original P frame." };
+                }
+                JsonObject closure = LoopClosureCheck.Evaluate(firstFrame, wrapFrame,
+                    (int)sourceWidth, (int)sourceHeight, withAlpha: packedAlpha, frames, judged: true,
+                    SwayRecurrenceSolver.SpeedLimitScale(settings.Width, settings.Height));
+                if (!request.KeepIntermediates && LoopClosureCheck.Allows(closure))
+                    seam = await EncodedLoopValidator.ValidateAsync(video, tools, frames, settings.FpsNumerator,
+                        settings.FpsDenominator, packedAlpha, closure, (int)encodeWidth * (packedAlpha ? 2 : 1),
+                        (int)encodeHeight, paddedContent, cancellationToken);
+                else
+                {
+                    LoopReference reference = await EncodedLoopValidator.FromScaledRenderAsync(tools, rendered, (int)encodeWidth,
+                        (int)encodeHeight, packedAlpha, frames, closure, cancellationToken);
+                    seam = await EncodedLoopValidator.ValidateAsync(video, tools, frames, settings.FpsNumerator, settings.FpsDenominator,
+                        packedAlpha, reference, paddedContent, cancellationToken);
+                }
+                // 门在渲染后就过了（见上面的降 QP 重试）；这里只在接缝过了时记下结果。
+                if (seam["status"]?.GetValue<string>() == "observed_seam_pass")
+                    gpuQuality = rendered["playback_quality_gate"]?.DeepClone().AsObject();
+            }
+            finally { DeleteRetainedFrames(); }
+        }
+        if (preview) DeleteRetainedFrames();
+        JsonObject? seamPreview = null;
+        if (!preview && SeamPreview.ShouldExport(false, false, seam, request.KeepIntermediates))
+        {
+            progress?.Report(new("exporting_seam_preview", 0, new Message("progress.exporting_seam_preview",
+                [SeamPreview.WindowFrames(frames, settings.FpsNumerator, settings.FpsDenominator)])));
+            using (timing.Measure(StageTiming.SeamCheck))
+            seamPreview = await SeamPreview.ExportOrWarnAsync(result, "effect-prefix-" + owner,
+                SeamPreview.Outcome(seam["status"]?.GetValue<string>()),
+                token => runner.ExportSeamPreviewAsync(video, Path.Combine(cacheOutput, SeamPreview.FileName), frames,
+                    settings.FpsNumerator, settings.FpsDenominator, "encoded_video", token), cancellationToken);
+        }
+        JsonObject? opaque = rendered["opaque_pixels"] as JsonObject;
+        // 不透明扫描覆盖渲染器交出的每一帧，包括只作参照、不进编码的第 P 帧。
+        bool opaquePass = packedAlpha || opaque?["requested"]?.GetValue<bool>() == true && opaque["verified"]?.GetValue<bool>() == true &&
+            opaque["checked_frames"]?.GetValue<ulong>() == frames + 1 && opaque["checked_pixels"]?.GetValue<ulong>() ==
+            checked((ulong)sourceWidth * sourceHeight * (frames + 1)) && opaque["minimum_alpha"]?.GetValue<int>() == 255;
+        bool seamPassed = preview || seam["status"]?.GetValue<string>() == "observed_seam_pass";
+        JsonObject hardware = earlyHardware ?? new() { ["status"] = "not_performed" };
+        if (seamPassed && gpuQuality?["passed"]?.GetValue<bool>() != false && opaquePass)
+            if (earlyHardware is null)
+                using (timing.Measure(StageTiming.HardwareDecodeCheck))
+                    hardware = await runner.ProbeHardwareDecodeAsync(video, Path.Combine(cacheOutput, "hardware-decode"), Math.Min(frames, 5), cancellationToken,
+                        request.DeviceUuid ?? settings.DeviceUuid);
+        string? rejection = !seamPassed ? "seam" : gpuQuality?["passed"]?.GetValue<bool>() == false ? "quality" :
+            !opaquePass ? "opaque_capture" : hardware["all_adapters_passed"]?.GetValue<bool>() != true ? "hardware_decode" : null;
+        if (rejection is not null)
+        {
+            var rejectedGroup = new JsonObject { ["id"] = "effect-prefix-" + owner,
+                ["status"] = "rejected_" + rejection,
+                ["owner_layer_id"] = owner, ["frames"] = frames, ["source_extent"] = new JsonArray(sourceWidth, sourceHeight),
+                ["encoded_extent"] = new JsonArray(storedWidth, storedHeight), ["packed_alpha"] = packedAlpha, ["video_path"] = video, ["period"] = loop,
+                ["capture_target"] = captureTarget, ["hardware_decode_preflight"] = decodePlan.ToJson(),
+                ["encoded_loop_validation"] = seam, ["hardware_decode"] = hardware, ["opaque_pixels"] = opaque?.DeepClone(),
+                ["playback_encode"] = encodeInfo, ["playback_quality_gate"] = gpuQuality, ["video_bytes"] = new FileInfo(video).Length };
+            SeamPreview.Attach(rejectedGroup, seamPreview);
+            result["groups"]!.AsArray().Add(rejectedGroup);
+            result["status"] = "candidate_rejected_" + rejection;
+            bool seamRejected = seam["status"]?.GetValue<string>() != "observed_seam_pass";
+            if (!seamRejected)
+                new Message(rejection == "quality" ? "bake.effect_prefix_quality_rejected"
+                    : rejection == "hardware_decode" ? "bake.effect_prefix_hardware_decode_rejected"
+                    : "bake.effect_prefix_opaque_unproven").Write(result, "reason");
+            else result["reason"] = MessageCatalog.Get("bake.effect_prefix_seam_rejected", MessageCatalog.English, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.English));
+            if (seamRejected)
+                result["reason_localized"] = new JsonObject { ["key"] = "bake.effect_prefix_seam_rejected",
+                    ["zh"] = MessageCatalog.Get("bake.effect_prefix_seam_rejected", MessageCatalog.Chinese, EncodedLoopValidator.RejectionDetail(seam, MessageCatalog.Chinese)),
+                    ["en"] = result["reason"]!.DeepClone(), ["params"] = new JsonArray() };
+            return new(result, null);
+        }
+        var encodedGroup = new JsonObject { ["id"] = "effect-prefix-" + owner, ["status"] = "encoded",
+            ["owner_layer_id"] = owner, ["frames"] = frames,
+            ["source_extent"] = new JsonArray(sourceWidth, sourceHeight),
+            ["encoded_extent"] = new JsonArray(storedWidth, storedHeight), ["logical_encoded_extent"] = new JsonArray(encodeWidth, encodeHeight),
+            ["sampling_basis"] = puppetAtlas ? "source_atlas_at_projected_canvas_density" : "source_image_fits_output",
+            ["packed_alpha"] = packedAlpha, ["video_path"] = video, ["period"] = loop, ["capture_target"] = captureTarget,
+            ["hardware_decode_preflight"] = decodePlan.ToJson(),
+            ["encoded_loop_validation"] = seam, ["hardware_decode"] = hardware, ["opaque_pixels"] = opaque?.DeepClone(),
+            ["playback_encode"] = encodeInfo, ["playback_quality_gate"] = gpuQuality, ["video_bytes"] = new FileInfo(video).Length };
+        if (radiance?["capture_scale"] is not null)
+        {
+            encodedGroup["hdr_capture_scale"] = hdrScale;
+            encodedGroup["hdr_capture_lower_bound"] = hdrLowerBound;
+        }
+        if (preview) encodedGroup["period_frames"] = periodFrames;
+        SeamPreview.Attach(encodedGroup, seamPreview);
+        result["groups"]!.AsArray().Add(encodedGroup);
+        return new(result, new(owner, prefix, video, storedWidth, storedHeight, sourceWidth, sourceHeight,
+            packedAlpha, paddedContent, hdrScale, hdrLowerBound, hdrSignedSqrt), rendered);
     }
 
     internal sealed record ComparisonState(string? Name, long? EpochMs, ulong Frames, int[] Owners);
