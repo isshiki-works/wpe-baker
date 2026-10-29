@@ -127,7 +127,8 @@ public:
     // mesh has bone weights.
     static void GenMeshFromMdl(SceneMesh::Submesh& submesh, const Mdl::Mesh& src,
                                array<float, 2> texcoord_scale  = { 1.0f, 1.0f },
-                               array<float, 3> position_offset = {});
+                               array<float, 3> position_offset = {},
+                               bool            split_streams   = false);
 
     // Like GenMeshFromMdl, but the submesh draws only the parts whose `id` is
     // in `clip_part_ids` — used for clipping-mask submeshes that only cover the

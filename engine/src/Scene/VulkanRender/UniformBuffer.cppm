@@ -154,7 +154,7 @@ public:
     UniformBufferBinding(SceneDrawItemId, resource::BufferUseHandle, UniformBufferLayout,
                          Vec<BoundUniformSource>, ShaderValues, ref<SceneMaterial>,
                          Vec<PreparedUniformTextureMetadata>, SceneRenderViewKind,
-                         ShaderMatrixConvention, ShaderMatrixAbi);
+                         ShaderMatrixConvention, ShaderMatrixAbi, bool disjoint_sources = false);
 
     auto Update(const UniformBufferFrameContext*,
                 resource::BufferContentWriter*) const
@@ -171,14 +171,17 @@ private:
     resource::BufferUseHandle           m_buffer;
     UniformBufferLayout                 m_layout;
     mutable Vec<BoundUniformSource>     m_sources;
+    mutable Vec<u64>                    m_versions;
     mutable rstd::vec::Vec<u8>          m_data;
     mutable rstd::vec::Vec<u8>          m_base_data;
+    mutable rstd::vec::Vec<u8>          m_uploaded_data;
     ShaderValues                        m_defaults;
     ref<SceneMaterial>                  m_material;
     Vec<PreparedUniformTextureMetadata> m_textures;
     SceneRenderViewKind                 m_render_view { SceneRenderViewKind::Primary };
     ShaderMatrixConvention m_matrix_convention { ShaderMatrixConvention::ColumnVector };
     ShaderMatrixAbi        m_matrix_abi { ShaderMatrixAbi::NativeSpirv };
+    bool                   m_disjoint_sources { false };
     mutable u64            m_material_version { 0 };
     mutable bool           m_uploaded { false };
 };
@@ -199,7 +202,9 @@ private:
     resource::BufferUseHandle       m_buffer;
     UniformBufferLayout             m_layout;
     mutable Vec<BoundUniformSource> m_sources;
+    mutable Vec<u64>                m_versions;
     mutable rstd::vec::Vec<u8>      m_data;
+    mutable rstd::vec::Vec<u8>      m_uploaded_data;
     ShaderMatrixConvention          m_matrix_convention { ShaderMatrixConvention::ColumnVector };
     ShaderMatrixAbi                 m_matrix_abi { ShaderMatrixAbi::NativeSpirv };
     mutable bool                    m_uploaded { false };

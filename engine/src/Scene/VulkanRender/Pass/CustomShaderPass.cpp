@@ -224,9 +224,10 @@ PassInvalidationFlags CustomShaderPass::finalizeResourceRequests(Scene& scene) {
 }
 
 void CustomShaderPass::declareResources(ResourceDeclarationContext& context) {
-    m_desc.shader_use         = rstd::None();
-    m_desc.buffer_uses        = {};
-    m_desc.uniform_block_uses = {};
+    m_desc.shader_use            = rstd::None();
+    m_desc.buffer_uses           = {};
+    m_desc.active_vertex_streams = {};
+    m_desc.uniform_block_uses    = {};
     m_desc.pipeline_use       = rstd::None();
     m_desc.render_pass_use    = rstd::None();
     m_desc.framebuffer_use    = rstd::None();
@@ -297,6 +298,19 @@ void CustomShaderPass::declareResources(ResourceDeclarationContext& context) {
 
     for (std::size_t index = 0; index < submesh.vertex_arrays.size(); ++index) {
         const auto& vertex = submesh.vertex_arrays[index];
+        if (index > 0 && artifact.is_some()) {
+            const auto attrs_map   = vertex.GetAttrOffsetMap();
+            bool       stream_used = false;
+            for (const auto& input : (**artifact).vertex_inputs) {
+                const std::string_view input_name = rstd::cppstd::as_string_view(input.name.as_str());
+                if (attrs_map.find(std::string(input_name)) != attrs_map.end()) {
+                    stream_used = true;
+                    break;
+                }
+            }
+            if (! stream_used) continue;
+        }
+        m_desc.active_vertex_streams.push(u32(static_cast<rstd::uint32_t>(index)));
         auto name = m_desc.draw_item.Valid()
                         ? BuildDrawBufferResourceName(m_desc.draw_item,
                                                       DrawBufferRole::Vertex,
@@ -952,35 +966,58 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, PassPrepareCo
     std::vector<VkVertexInputAttributeDescription> attr_descriptions;
     {
         RenderBufferResolver buffer_resolver(*context.resources);
-        DrawBufferRequest    buffer_request { .render_item   = m_desc.render_item,
-                                              .mesh          = &mesh,
-                                              .submesh_index = m_desc.submesh_index,
-                                              .buffer_uses   = m_desc.buffer_uses.as_slice() };
+        DrawBufferRequest    buffer_request {
+            .render_item           = m_desc.render_item,
+            .mesh                  = &mesh,
+            .submesh_index         = m_desc.submesh_index,
+            .buffer_uses           = m_desc.buffer_uses.as_slice(),
+            .active_vertex_streams = m_desc.active_vertex_streams.as_slice(),
+        };
         auto                 draw_buffers = buffer_resolver.prepareDrawBuffers(buffer_request);
         if (! draw_buffers) return;
         m_desc.draw_buffers = std::move(*draw_buffers);
 
-        for (unsigned i = 0; i < submesh.vertex_arrays.size(); i++) {
-            const auto& vertex    = submesh.vertex_arrays[i];
-            auto        attrs_map = vertex.GetAttrOffsetMap();
+        const bool has_filter = ! m_desc.active_vertex_streams.is_empty();
+        const unsigned stream_count =
+            has_filter ? static_cast<unsigned>(m_desc.active_vertex_streams.len().to_primitive())
+                       : static_cast<unsigned>(submesh.vertex_arrays.size());
+        std::vector<decltype(submesh.vertex_arrays[0].GetAttrOffsetMap())> slot_attr_maps;
+        slot_attr_maps.reserve(stream_count);
+
+        for (unsigned slot = 0; slot < stream_count; slot++) {
+            const std::size_t stream_idx =
+                has_filter ? m_desc.active_vertex_streams[usize(slot)].to_primitive()
+                           : std::size_t(slot);
+            const auto& vertex = submesh.vertex_arrays[stream_idx];
+            slot_attr_maps.push_back(vertex.GetAttrOffsetMap());
 
             VkVertexInputBindingDescription bind_desc {
-                .binding   = i,
+                .binding   = slot,
                 .stride    = static_cast<rstd::uint32_t>(vertex.OneSizeOf().to_primitive()),
                 .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
             };
             bind_descriptions.push_back(bind_desc);
+        }
 
+        if (stream_count > 0) {
             for (auto& item : ref->input_location_map) {
-                auto& name   = item.first;
-                auto& input  = item.second;
-                usize offset = exists(attrs_map, name) ? attrs_map[name].offset : usize();
-
+                auto&    name           = item.first;
+                auto&    input          = item.second;
+                unsigned matched_slot   = 0;
+                usize    matched_offset = usize();
+                for (unsigned slot = 0; slot < stream_count; slot++) {
+                    auto it = slot_attr_maps[slot].find(name);
+                    if (it != slot_attr_maps[slot].end()) {
+                        matched_slot   = slot;
+                        matched_offset = it->second.offset;
+                        break;
+                    }
+                }
                 VkVertexInputAttributeDescription attr_desc {
                     .location = input.location,
-                    .binding  = i,
+                    .binding  = matched_slot,
                     .format   = input.format,
-                    .offset   = static_cast<rstd::uint32_t>(offset.to_primitive()),
+                    .offset   = static_cast<rstd::uint32_t>(matched_offset.to_primitive()),
                 };
                 attr_descriptions.push_back(attr_desc);
             }
@@ -1299,10 +1336,11 @@ bool CustomShaderPass::update(PassUpdateContext& context) {
     if (m_desc.draw_buffers.dynamic) {
         if (m_desc.node.is_none() || (*m_desc.node)->Mesh() == nullptr) return false;
         DrawBufferRequest request {
-            .render_item   = m_desc.render_item,
-            .mesh          = (*m_desc.node)->Mesh(),
-            .submesh_index = m_desc.submesh_index,
-            .buffer_uses   = m_desc.buffer_uses.as_slice(),
+            .render_item           = m_desc.render_item,
+            .mesh                  = (*m_desc.node)->Mesh(),
+            .submesh_index         = m_desc.submesh_index,
+            .buffer_uses           = m_desc.buffer_uses.as_slice(),
+            .active_vertex_streams = m_desc.active_vertex_streams.as_slice(),
         };
         if (! RenderBufferResolver::updateDynamicDrawBuffers(
                 request, m_desc.draw_buffers, context.buffers)) {
@@ -1460,13 +1498,19 @@ void CustomShaderPass::recordRenderScopeDraw(PassRecordContext& context) {
     if (!cache_defaults && context.draw_state) context.draw_state->defaults_set = false;
 
     auto& draw_buffers = m_desc.draw_buffers;
-    for (usize i {}; i < draw_buffers.vertices.len(); i++) {
-        auto prepared = context.resources->Resolve(draw_buffers.vertices[i]);
-        if (prepared.is_none()) return;
-        auto&        mref = (**prepared).buffer.physical->buffer;
-        VkBuffer     vb   = mref.buffer();
-        VkDeviceSize off  = mref.offset();
-        cmd.BindVertexBuffers(static_cast<rstd::uint32_t>(i.to_primitive()), 1, &vb, &off);
+    if (! draw_buffers.vertices.is_empty()) {
+        rstd::array<VkBuffer, 8>     vbs {};
+        rstd::array<VkDeviceSize, 8> offs {};
+        const usize count = draw_buffers.vertices.len() < usize(8) ? draw_buffers.vertices.len() : usize(8);
+        for (usize i {}; i < count; i++) {
+            auto prepared = context.resources->Resolve(draw_buffers.vertices[i]);
+            if (prepared.is_none()) return;
+            auto& mref = (**prepared).buffer.physical->buffer;
+            vbs[i]     = mref.buffer();
+            offs[i]    = mref.offset();
+        }
+        cmd.BindVertexBuffers(
+            0, static_cast<rstd::uint32_t>(count.to_primitive()), vbs.data(), offs.data());
     }
     if (draw_buffers.index.is_some()) {
         auto prepared = context.resources->Resolve(*draw_buffers.index);

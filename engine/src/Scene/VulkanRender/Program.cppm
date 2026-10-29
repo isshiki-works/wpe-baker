@@ -788,7 +788,8 @@ struct RenderProgram {
         for (auto& record : pass_records) {
             auto pass = resolve(record);
             if (pass) {
-                if (record.needsPrepare(*pass)) record.uniforms_need_prepare = true;
+                const bool needs_prepare = record.needsPrepare(*pass);
+                if (needs_prepare) record.uniforms_need_prepare = true;
                 if (record.invalidated()) {
                     rr.resources.RemovePreparedGraphics(record.resources.pipelines.as_slice(),
                                                         record.resources.render_passes.as_slice(),
@@ -801,7 +802,7 @@ struct RenderProgram {
                     rstd_error("prepare pass failed for {}", record.pass_name);
                     return false;
                 }
-                record.resources = pass->resourceUses();
+                if (needs_prepare) record.resources = pass->resourceUses();
             }
         }
         return true;

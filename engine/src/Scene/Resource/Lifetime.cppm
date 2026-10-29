@@ -89,12 +89,13 @@ struct SubmissionLease {
 class SubmissionTracker {
 public:
     auto Begin(const PreparedResourceTable&           resources,
-               Option<vulkan::BufferUploadBatchLease> buffer_uploads = None())
+               Option<vulkan::BufferUploadBatchLease> buffer_uploads        = None(),
+               bool                                   retain_prepared_leases = true)
         -> resource::CompletionToken {
         ++m_next_value;
         if (m_next_value == u64()) ++m_next_value;
         resource::CompletionToken completion { .value = m_next_value };
-        auto                      leases = resources.Leases();
+        auto leases = retain_prepared_leases ? resources.Leases() : PreparedResourceLeases {};
         if (m_in_flight
                 .insert(completion.value,
                         SubmissionLease {

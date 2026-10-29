@@ -60,6 +60,7 @@ struct DrawBufferRequest {
     u32                                    submesh_index { 0 };
     u64                                    dynamic_allocation_generation { 0 };
     rstd::slice<resource::BufferUseHandle> buffer_uses;
+    rstd::slice<u32>                       active_vertex_streams {};
 };
 
 String BuildDrawBufferResourceName(SceneDrawItemId, DrawBufferRole, u32 stream_index = u32());

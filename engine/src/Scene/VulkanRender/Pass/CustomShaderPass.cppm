@@ -53,6 +53,7 @@ public:
         rstd::Option<TextureRequest>                 depth_request;
         rstd::Option<resource::ShaderUseHandle>      shader_use;
         rstd::vec::Vec<resource::BufferUseHandle>    buffer_uses;
+        rstd::vec::Vec<u32>                          active_vertex_streams;
         rstd::vec::Vec<UniformBlockUse>              uniform_block_uses;
         rstd::Option<resource::PipelineUseHandle>    pipeline_use;
         rstd::Option<resource::RenderPassUseHandle>  render_pass_use;

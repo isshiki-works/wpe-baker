@@ -1673,11 +1673,14 @@ public:
         // A sound layer is audible only while its layer is visible, which is
         // how scenes implement track selectors: the selector binds each sound
         // layer's visibility to a user property.
-        if (m_sound_control.is_some() && v != m_visible) {
-            if (v) {
-                (*m_sound_control)->Play();
-            } else {
-                (*m_sound_control)->Stop();
+        if (v != m_visible) {
+            m_scene_visibility_epoch = u64();
+            if (m_sound_control.is_some()) {
+                if (v) {
+                    (*m_sound_control)->Play();
+                } else {
+                    (*m_sound_control)->Stop();
+                }
             }
         }
         m_visible            = v;
@@ -1928,6 +1931,7 @@ private:
     bool                                   m_capture_force_visibility_alpha { false };
     SceneUserVisibilityBinding             m_visible_user_binding {};
     bool                                   m_visible_overridden { false };
+    u64                                    m_scene_visibility_epoch { 0 };
     float                                  m_user_alpha { 1.0f };
     bool                                   m_alpha_overridden { false };
     SceneNode*                             m_alpha_source { nullptr };
@@ -3011,7 +3015,7 @@ public:
     }
     bool                             SetNodeVisible(SceneNode& node, bool visible);
     bool                             ResizeRenderTarget(ref<str> name, i32 width, i32 height);
-    Vec<SceneMeshDirtyEvent>         ConsumePreparedMeshDirtyEvents();
+    Vec<SceneMeshDirtyEvent>         ConsumePreparedMeshDirtyEvents(bool include_data = true);
     Vec<SceneMaterialDirtyEvent>     ConsumePreparedMaterialDirtyEvents();
     Vec<SceneRenderTargetDirtyEvent> ConsumePreparedRenderTargetDirtyEvents();
     void                             ClearUserPropertyDiagnostics(ref<str> key);
@@ -3104,6 +3108,7 @@ private:
     HashSet<i32>            m_render_graph_elidable_layer_ids;
     HashSet<i32>            m_static_elidable_layer_ids;
     HashSet<i32>            m_visibility_elidable_layer_ids;
+    u64                     m_visibility_elision_epoch { 1 };
     HashSet<rstd::uint64_t> m_hidden_scene_node_ids;
     HashSet<rstd::uint64_t> m_render_graph_hidden_scene_node_ids;
 };

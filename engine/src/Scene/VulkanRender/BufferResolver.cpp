@@ -59,17 +59,25 @@ std::vector<DrawBufferKey> BuildDrawBufferKeys(const DrawBufferRequest& request,
     if (submesh_index >= mesh.Submeshes().size()) return keys;
 
     const auto& submesh = mesh.Submeshes()[submesh_index];
-    keys.reserve(submesh.vertex_arrays.size() + (submesh.index_arrays.empty() ? 0u : 1u));
+    const bool  has_filter = ! request.active_vertex_streams.is_empty();
+    const std::size_t stream_count =
+        has_filter ? request.active_vertex_streams.len().to_primitive()
+                   : submesh.vertex_arrays.size();
+    keys.reserve(stream_count + (submesh.index_arrays.empty() ? 0u : 1u));
     const u64 resolved_allocation = mesh.Dynamic() ? allocation_generation : u64();
 
-    for (std::size_t i = 0; i < submesh.vertex_arrays.size(); ++i) {
-        const auto& vertex = submesh.vertex_arrays[i];
-        keys.push_back(DrawBufferKey { .render_item           = request.render_item,
-                                       .role                  = DrawBufferRole::Vertex,
-                                       .submesh_index         = request.submesh_index,
-                                       .stream_index          = u32(static_cast<rstd::uint32_t>(i)),
-                                       .data_generation       = vertex.DataGeneration(),
-                                       .allocation_generation = resolved_allocation });
+    for (std::size_t slot = 0; slot < stream_count; ++slot) {
+        const std::size_t stream_idx =
+            has_filter ? request.active_vertex_streams[usize(slot)].to_primitive() : slot;
+        if (stream_idx >= submesh.vertex_arrays.size()) continue;
+        const auto& vertex = submesh.vertex_arrays[stream_idx];
+        keys.push_back(DrawBufferKey {
+            .render_item           = request.render_item,
+            .role                  = DrawBufferRole::Vertex,
+            .submesh_index         = request.submesh_index,
+            .stream_index          = u32(static_cast<rstd::uint32_t>(stream_idx)),
+            .data_generation       = vertex.DataGeneration(),
+            .allocation_generation = resolved_allocation });
     }
 
     if (! submesh.index_arrays.empty()) {
@@ -92,28 +100,37 @@ Option<DrawBufferRefs> RenderBufferResolver::prepareDrawBuffers(const DrawBuffer
     const std::size_t native_submesh_index = submesh_index.to_primitive();
     if (mesh.Submeshes().empty() || native_submesh_index >= mesh.Submeshes().size()) return None();
 
-    const auto& submesh = mesh.Submeshes()[native_submesh_index];
+    const auto& submesh    = mesh.Submeshes()[native_submesh_index];
+    const bool  has_filter = ! request.active_vertex_streams.is_empty();
+    const std::size_t stream_count =
+        has_filter ? request.active_vertex_streams.len().to_primitive()
+                   : submesh.vertex_arrays.size();
 
     DrawBufferRefs out;
     out.render_item           = request.render_item;
     out.dynamic               = mesh.Dynamic();
     out.allocation_generation = resolve_allocation_generation(request, out.dynamic);
     auto keys                 = BuildDrawBufferKeys(request, out.allocation_generation);
-    out.vertex_keys.reserve(submesh.vertex_arrays.size());
-    out.vertex_sources.reserve(submesh.vertex_arrays.size());
+    out.vertex_keys.reserve(stream_count);
+    out.vertex_sources.reserve(stream_count);
 
-    for (std::size_t i = 0; i < submesh.vertex_arrays.size(); i++) {
-        const auto& vertex = submesh.vertex_arrays[i];
-        out.vertex_keys.push_back(keys[i]);
+    for (std::size_t slot = 0; slot < stream_count; slot++) {
+        const std::size_t stream_idx =
+            has_filter ? request.active_vertex_streams[usize(slot)].to_primitive() : slot;
+        if (stream_idx >= submesh.vertex_arrays.size()) return None();
+        const auto& vertex = submesh.vertex_arrays[stream_idx];
+        out.vertex_keys.push_back(keys[slot]);
         // Preparing a reused dynamic allocation does not upload its contents.
         // The first update must queue the current CPU data before it can be skipped.
         out.vertex_sources.push_back(nullptr);
-        out.draw_count += rstd::as_cast<u32>(vertex.DataSize() / vertex.OneSize());
+        if (slot == 0) {
+            out.draw_count = rstd::as_cast<u32>(vertex.DataSize() / vertex.OneSize());
+        }
 
-        if (i >= request.buffer_uses.len().to_primitive()) return None();
-        auto prepared = m_resources->Resolve(request.buffer_uses[usize(i)]);
+        if (slot >= request.buffer_uses.len().to_primitive()) return None();
+        auto prepared = m_resources->Resolve(request.buffer_uses[usize(slot)]);
         if (prepared.is_none()) return None();
-        out.vertices.push(resource::BufferUseHandle(request.buffer_uses[usize(i)]));
+        out.vertices.push(resource::BufferUseHandle(request.buffer_uses[usize(slot)]));
     }
 
     if (! submesh.index_arrays.empty()) {
@@ -121,7 +138,7 @@ Option<DrawBufferRefs> RenderBufferResolver::prepareDrawBuffers(const DrawBuffer
         out.draw_count    = rstd::as_cast<u32>(index.RenderDataCount());
         out.index_key     = Some<DrawBufferKey>(keys.back());
 
-        auto use_index = submesh.vertex_arrays.size();
+        auto use_index = stream_count;
         if (use_index >= request.buffer_uses.len().to_primitive()) return None();
         auto prepared = m_resources->Resolve(request.buffer_uses[usize(use_index)]);
         if (prepared.is_none()) return None();
@@ -141,7 +158,11 @@ bool RenderBufferResolver::updateDynamicDrawBuffers(
     const std::size_t native_submesh_index = submesh_index.to_primitive();
     if (native_submesh_index >= mesh.Submeshes().size()) return true;
 
-    const auto& submesh = mesh.Submeshes()[native_submesh_index];
+    const auto& submesh    = mesh.Submeshes()[native_submesh_index];
+    const bool  has_filter = ! request.active_vertex_streams.is_empty();
+    const std::size_t stream_count =
+        has_filter ? request.active_vertex_streams.len().to_primitive()
+                   : submesh.vertex_arrays.size();
     if (! submesh.index_arrays.empty()) {
         buffers.draw_count = rstd::as_cast<u32>(submesh.index_arrays[0].RenderDataCount());
     } else if (! submesh.vertex_arrays.empty()) {
@@ -153,23 +174,26 @@ bool RenderBufferResolver::updateDynamicDrawBuffers(
         mesh.SetLayoutDirty();
         return false;
     };
-    if (buffers.vertices.len().to_primitive() != submesh.vertex_arrays.size())
+    if (buffers.vertices.len().to_primitive() != stream_count)
         return require_reprepare();
-    if (buffers.vertex_keys.size() != submesh.vertex_arrays.size()) return require_reprepare();
+    if (buffers.vertex_keys.size() != stream_count) return require_reprepare();
     if (buffers.index.is_some() != ! submesh.index_arrays.empty()) return require_reprepare();
-    if (buffers.vertex_sources.size() != submesh.vertex_arrays.size())
-        buffers.vertex_sources.assign(submesh.vertex_arrays.size(), nullptr);
+    if (buffers.vertex_sources.size() != stream_count)
+        buffers.vertex_sources.assign(stream_count, nullptr);
 
-    for (std::size_t i = 0; i < submesh.vertex_arrays.size(); i++) {
-        const auto& vertex = submesh.vertex_arrays[i];
+    for (std::size_t slot = 0; slot < stream_count; slot++) {
+        const std::size_t stream_idx =
+            has_filter ? request.active_vertex_streams[usize(slot)].to_primitive() : slot;
+        if (stream_idx >= submesh.vertex_arrays.size()) return require_reprepare();
+        const auto& vertex = submesh.vertex_arrays[stream_idx];
         const auto generation = vertex.DataGeneration();
-        if (buffers.vertex_sources[i] == &vertex &&
-            buffers.vertex_keys[i].data_generation == generation) continue;
-        auto updated = writer->UpdateBuffer(buffers.vertices[usize(i)],
+        if (buffers.vertex_sources[slot] == &vertex &&
+            buffers.vertex_keys[slot].data_generation == generation) continue;
+        auto updated = writer->UpdateBuffer(buffers.vertices[usize(slot)],
                                             bytesOf(vertex.Data(), vertex.DataSizeOf()));
         if (updated.is_err()) return require_reprepare();
-        buffers.vertex_keys[i].data_generation = generation;
-        buffers.vertex_sources[i] = &vertex;
+        buffers.vertex_keys[slot].data_generation = generation;
+        buffers.vertex_sources[slot] = &vertex;
     }
 
     if (! submesh.index_arrays.empty()) {

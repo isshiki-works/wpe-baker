@@ -225,7 +225,8 @@ inline TextureRequest MakeImportedTextureRequest(std::string_view            nam
 inline TextureRequest MakeRenderTargetTextureRequest(std::string_view         name,
                                                      const SceneRenderTarget& rt) {
     auto content = TextureContentFlag(TextureContent::SourceDefined);
-    if (rt.force_clear) content |= TextureContentFlag(TextureContent::ClearOnFirstWrite);
+    if (rt.force_clear || rt.clear_on_first_write)
+        content |= TextureContentFlag(TextureContent::ClearOnFirstWrite);
     if (rt.initialize_transparent) {
         content |= TextureContentFlag(TextureContent::InitializeTransparent);
     }
@@ -246,7 +247,8 @@ inline TextureRequest MakeRenderTargetTextureRequest(std::string_view         na
 inline TextureRequest MakeRenderTargetNoMipTextureRequest(std::string_view         name,
                                                           const SceneRenderTarget& rt) {
     auto content = TextureContentFlag(TextureContent::SourceDefined);
-    if (rt.force_clear) content |= TextureContentFlag(TextureContent::ClearOnFirstWrite);
+    if (rt.force_clear || rt.clear_on_first_write)
+        content |= TextureContentFlag(TextureContent::ClearOnFirstWrite);
     if (rt.initialize_transparent) {
         content |= TextureContentFlag(TextureContent::InitializeTransparent);
     }

@@ -135,19 +135,29 @@ private:
             auto handle  = **existing;
             auto texture = m_textures.get_mut(handle);
             if (texture.is_none()) return {};
-            if (! SameTextureRequest((**texture).request, request)) {
-                if ((**texture).request.definition != request.definition) {
-                    ++(**texture).definition_version;
+            const bool req_changed     = ! SameTextureRequest((**texture).request, request);
+            const bool content_changed = (**texture).imported_content != content;
+            if (req_changed || content_changed) {
+                if (m_transaction.is_some()) {
+                    auto& tx = **m_transaction;
+                    if (! tx.modified_textures.contains_key(handle)) {
+                        (void)tx.modified_textures.insert(handle, (**texture).clone());
+                    }
                 }
-                if (request.kind != TextureRequestKind::Imported &&
-                    (**texture).request.source != request.source) {
+                if (req_changed) {
+                    if ((**texture).request.definition != request.definition) {
+                        ++(**texture).definition_version;
+                    }
+                    if (request.kind != TextureRequestKind::Imported &&
+                        (**texture).request.source != request.source) {
+                        ++(**texture).content_version;
+                    }
+                    (**texture).request = rstd::move(request);
+                }
+                if (content_changed) {
                     ++(**texture).content_version;
+                    (**texture).imported_content = rstd::move(content);
                 }
-                (**texture).request = rstd::move(request);
-            }
-            if ((**texture).imported_content != content) {
-                ++(**texture).content_version;
-                (**texture).imported_content = rstd::move(content);
             }
             return handle;
         }
@@ -156,6 +166,11 @@ private:
             .index      = m_next_index++,
             .generation = m_generation,
         };
+        if (m_transaction.is_some()) {
+            auto& tx = **m_transaction;
+            tx.inserted_identities.push(identity.clone());
+            tx.inserted_textures.emplace_back(handle);
+        }
         (void)m_textures.insert(handle,
                                 Texture {
                                     .id               = handle,
@@ -205,6 +220,7 @@ public:
                     PendingTextureUpload { .handle = handle, .physical = rstd::move(physical) });
             }
         } else {
+            RecordResourceMutation(handle);
             (void)m_resources.insert(handle, rstd::move(physical));
         }
         return Some(physical_generation);
@@ -217,6 +233,7 @@ public:
             if (pending.is_none()) continue;
             for (auto& item : *pending) {
                 if (ready.is_some()) item.physical.ready = *ready;
+                RecordResourceMutation(item.handle);
                 (void)m_resources.insert(item.handle, rstd::move(item.physical));
             }
         }
@@ -287,19 +304,33 @@ public:
 
     bool BeginPrepareTransaction() {
         if (m_transaction.is_some() || ! m_pending_uploads.is_empty()) return false;
-        m_transaction = Some(Box<Snapshot>::make(CloneSnapshot()));
+        m_transaction = Some(Box<Transaction>::make(Transaction { .next_index = m_next_index }));
         return true;
     }
 
     void CommitPrepareTransaction() { (void)m_transaction.take(); }
 
     void AbortPrepareTransaction() {
-        auto snapshot = m_transaction.take();
-        if (snapshot.is_none()) return;
-        m_textures   = rstd::move((*snapshot)->textures);
-        m_resources  = rstd::move((*snapshot)->resources);
-        m_handles    = rstd::move((*snapshot)->handles);
-        m_next_index = (*snapshot)->next_index;
+        auto tx = m_transaction.take();
+        if (tx.is_none()) return;
+        for (usize i {}; i < (*tx)->inserted_resources.len(); ++i) {
+            (void)m_resources.remove((*tx)->inserted_resources[i]);
+        }
+        auto mod_res = (*tx)->modified_resources.iter();
+        for (auto item = mod_res.next(); item.is_some(); item = mod_res.next()) {
+            (void)m_resources.insert(*item->template get<0>(), item->template get<1>()->clone());
+        }
+        for (usize i {}; i < (*tx)->inserted_identities.len(); ++i) {
+            (void)m_handles.remove((*tx)->inserted_identities[i]);
+        }
+        for (usize i {}; i < (*tx)->inserted_textures.len(); ++i) {
+            (void)m_textures.remove((*tx)->inserted_textures[i]);
+        }
+        auto mod_tex = (*tx)->modified_textures.iter();
+        for (auto item = mod_tex.next(); item.is_some(); item = mod_tex.next()) {
+            (void)m_textures.insert(*item->template get<0>(), item->template get<1>()->clone());
+        }
+        m_next_index = (*tx)->next_index;
         m_pending_uploads.clear();
     }
 
@@ -360,35 +391,28 @@ private:
     template<typename Value>
     using HandleMap = rstd::collections::HashMap<resource::TextureHandle, Value>;
 
-    struct Snapshot {
-        HandleMap<Texture>                                                           textures;
-        HandleMap<TexturePhysical>                                                   resources;
-        rstd::collections::HashMap<TextureRegistryIdentity, resource::TextureHandle> handles;
-        u64 next_index { 0 };
+    struct Transaction {
+        HandleMap<Texture>           modified_textures;
+        Vec<TextureRegistryIdentity> inserted_identities;
+        Vec<resource::TextureHandle> inserted_textures;
+        HandleMap<TexturePhysical>   modified_resources;
+        Vec<resource::TextureHandle> inserted_resources;
+        u64                          next_index { 0 };
     };
 
-    auto CloneSnapshot() const -> Snapshot {
-        Snapshot snapshot;
-        snapshot.textures.reserve(m_textures.len());
-        auto textures = m_textures.iter();
-        for (auto item = textures.next(); item.is_some(); item = textures.next()) {
-            (void)snapshot.textures.insert(*item->template get<0>(),
-                                           item->template get<1>()->clone());
+    void RecordResourceMutation(resource::TextureHandle handle) {
+        if (m_transaction.is_none()) return;
+        auto& tx = **m_transaction;
+        if (tx.modified_resources.contains_key(handle)) return;
+        for (usize i {}; i < tx.inserted_resources.len(); ++i) {
+            if (tx.inserted_resources[i] == handle) return;
         }
-        snapshot.resources.reserve(m_resources.len());
-        auto resources = m_resources.iter();
-        for (auto item = resources.next(); item.is_some(); item = resources.next()) {
-            (void)snapshot.resources.insert(*item->template get<0>(),
-                                            item->template get<1>()->clone());
+        auto current = m_resources.get(handle);
+        if (current.is_some()) {
+            (void)tx.modified_resources.insert(handle, (**current).clone());
+        } else {
+            tx.inserted_resources.emplace_back(handle);
         }
-        snapshot.handles.reserve(m_handles.len());
-        auto handles = m_handles.iter();
-        for (auto item = handles.next(); item.is_some(); item = handles.next()) {
-            (void)snapshot.handles.insert(item->template get<0>()->clone(),
-                                          *item->template get<1>());
-        }
-        snapshot.next_index = m_next_index;
-        return snapshot;
     }
 
     u64                                                                          m_generation { 1 };
@@ -397,7 +421,7 @@ private:
     HandleMap<TexturePhysical>                                                   m_resources;
     rstd::collections::HashMap<TextureRegistryIdentity, resource::TextureHandle> m_handles;
     rstd::collections::HashMap<u64, Vec<PendingTextureUpload>>                   m_pending_uploads;
-    Option<Box<Snapshot>>                                                        m_transaction;
+    Option<Box<Transaction>>                                                     m_transaction;
 };
 
 } // namespace owe::resource

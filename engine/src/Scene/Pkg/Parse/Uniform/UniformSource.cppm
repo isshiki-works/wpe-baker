@@ -316,8 +316,11 @@ public:
     auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> override { return None(); }
 
 private:
-    Arc<UniformSceneState> m_state;
-    Arc<UniformNodeState>  m_node;
+    Arc<UniformSceneState>      m_state;
+    Arc<UniformNodeState>       m_node;
+    mutable u64                 m_cached_frame_revision { 0 };
+    mutable SceneRenderViewKind m_cached_view { SceneRenderViewKind::Primary };
+    mutable u64                 m_cached_version { 0 };
 };
 
 class FrameUniformSource final : public UniformSource {

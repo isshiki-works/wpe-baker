@@ -574,7 +574,7 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
             .height               = initial_layer_h,
             .allowReuse           = true,
             .force_clear          = ! copy_background_seed,
-            .clear_on_first_write = false,
+            .clear_on_first_write = true,
             .preserve_on_write    = copy_background_seed,
         };
         if (has_text_effect) {

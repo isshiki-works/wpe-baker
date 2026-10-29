@@ -91,29 +91,14 @@ struct BridgeAtoms {
     JSAtom this_layer {}, this_object {};
 };
 
+JSValue MakeFastVec(JSContext* ctx, double x, double y, double z, double w, int n);
+
 JSValue MakeVecValue(JSContext* ctx, double x, double y, double z, int n) {
-    JSValue global  = JS_GetGlobalObject(ctx);
-    JSValue ctor    = JS_GetPropertyStr(ctx, global, n == 2 ? "Vec2" : "Vec3");
-    JSValue argv[3] = { JS_NewFloat64(ctx, x), JS_NewFloat64(ctx, y), JS_NewFloat64(ctx, z) };
-    JSValue obj     = JS_CallConstructor(ctx, ctor, n, argv);
-    for (int i = 0; i < n; ++i) JS_FreeValue(ctx, argv[i]);
-    if (n < 3) JS_FreeValue(ctx, argv[2]);
-    JS_FreeValue(ctx, ctor);
-    JS_FreeValue(ctx, global);
-    return obj;
+    return MakeFastVec(ctx, x, y, z, 0.0, n);
 }
 
 JSValue MakeVec4Value(JSContext* ctx, double x, double y, double z, double w) {
-    JSValue global  = JS_GetGlobalObject(ctx);
-    JSValue ctor    = JS_GetPropertyStr(ctx, global, "Vec4");
-    JSValue argv[4] = {
-        JS_NewFloat64(ctx, x), JS_NewFloat64(ctx, y), JS_NewFloat64(ctx, z), JS_NewFloat64(ctx, w)
-    };
-    JSValue obj = JS_CallConstructor(ctx, ctor, 4, argv);
-    for (auto& arg : argv) JS_FreeValue(ctx, arg);
-    JS_FreeValue(ctx, ctor);
-    JS_FreeValue(ctx, global);
-    return obj;
+    return MakeFastVec(ctx, x, y, z, w, 4);
 }
 
 // JSValue→ScriptValue coercion. Mirrors the table in the API doc; never
@@ -458,15 +443,23 @@ struct EngineHostState {
     };
     Option<Arc<AudioResponseDemand>>      audio_response_demand;
     Option<std::unique_ptr<UniformBindingLease>> audio_response_lease;
-    // Cached `globalThis.Vec3` ctor, populated lazily on first node access.
-    // Used by the SceneNode wrapper to hand back Vec3 instances so scripts
+    // Cached `globalThis.Vec3` ctor and Vec2/3/4 prototypes, populated lazily.
+    // Used by the SceneNode wrapper to hand back Vec instances so scripts
     // can call `.add` / `.subtract` on `thisLayer.origin`.
     JSValue vec3_ctor { JS_UNDEFINED };
+    JSValue vec2_proto { JS_UNDEFINED };
+    JSValue vec3_proto { JS_UNDEFINED };
+    JSValue vec4_proto { JS_UNDEFINED };
+    std::unordered_map<owe::SceneNode*, JSValue> layer_wrappers;
     // The original JS-side `thisLayer` / `thisScene` stubs, captured at
     // bootstrap. Per-script binding restores them when a script has no
     // backing SceneNode.
     JSValue default_layer { JS_UNDEFINED };
     JSValue default_scene { JS_UNDEFINED };
+    bool        has_synced_inputs { false };
+    FrameInputs last_synced_inputs {};
+    double      last_synced_world_x { 0.0 };
+    double      last_synced_world_y { 0.0 };
     // engine.setTimeout / setInterval queue. Swept once per frame in
     // JsRuntime::TickAll before the script update loop runs.
     std::vector<DeferredCb> deferred;
@@ -793,23 +786,48 @@ void TraceDependency(JSContext* ctx, std::string_view operation, std::string_vie
         script == nullptr || !script->init_done });
 }
 
-JSValue MakeVec2Value(JSContext* ctx, double x, double y) {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue ctor   = JS_GetPropertyStr(ctx, global, "Vec2");
-    JS_FreeValue(ctx, global);
-    if (! JS_IsFunction(ctx, ctor)) {
-        JS_FreeValue(ctx, ctor);
-        JSValue v = JS_NewObject(ctx);
-        JS_DefinePropertyValueStr(ctx, v, "x", JS_NewFloat64(ctx, x), JS_PROP_C_W_E);
-        JS_DefinePropertyValueStr(ctx, v, "y", JS_NewFloat64(ctx, y), JS_PROP_C_W_E);
-        return v;
+JSValue MakeFastVec(JSContext* ctx, double x, double y, double z, double w, int n) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (host != nullptr) {
+        JSValue* proto_slot = n == 2 ? &host->vec2_proto
+                            : n == 4 ? &host->vec4_proto
+                                     : &host->vec3_proto;
+        if (JS_IsUndefined(*proto_slot)) {
+            const char* ctor_name = n == 2 ? "Vec2" : (n == 4 ? "Vec4" : "Vec3");
+            JSValue     g         = JS_GetGlobalObject(ctx);
+            JSValue     ctor      = JS_GetPropertyStr(ctx, g, ctor_name);
+            JS_FreeValue(ctx, g);
+            if (JS_IsObject(ctor)) {
+                *proto_slot = JS_GetPropertyStr(ctx, ctor, "prototype");
+            }
+            JS_FreeValue(ctx, ctor);
+        }
+        if (JS_IsObject(*proto_slot)) {
+            JSValue obj = JS_NewObjectProto(ctx, *proto_slot);
+            if (JS_IsException(obj)) return obj;
+            JS_DefinePropertyValue(ctx, obj, host->atoms.x, JS_NewFloat64(ctx, x), JS_PROP_C_W_E);
+            JS_DefinePropertyValue(ctx, obj, host->atoms.y, JS_NewFloat64(ctx, y), JS_PROP_C_W_E);
+            if (n >= 3) {
+                JS_DefinePropertyValue(
+                    ctx, obj, host->atoms.z, JS_NewFloat64(ctx, z), JS_PROP_C_W_E);
+            }
+            if (n >= 4) {
+                JS_DefinePropertyValue(
+                    ctx, obj, host->atoms.w, JS_NewFloat64(ctx, w), JS_PROP_C_W_E);
+            }
+            return obj;
+        }
     }
-    JSValue args[2] { JS_NewFloat64(ctx, x), JS_NewFloat64(ctx, y) };
-    JSValue out = JS_CallConstructor(ctx, ctor, 2, args);
-    JS_FreeValue(ctx, args[0]);
-    JS_FreeValue(ctx, args[1]);
-    JS_FreeValue(ctx, ctor);
-    return out;
+    JSValue obj = JS_NewObject(ctx);
+    JS_DefinePropertyValueStr(ctx, obj, "x", JS_NewFloat64(ctx, x), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, obj, "y", JS_NewFloat64(ctx, y), JS_PROP_C_W_E);
+    if (n >= 3) JS_DefinePropertyValueStr(ctx, obj, "z", JS_NewFloat64(ctx, z), JS_PROP_C_W_E);
+    if (n >= 4) JS_DefinePropertyValueStr(ctx, obj, "w", JS_NewFloat64(ctx, w), JS_PROP_C_W_E);
+    return obj;
+}
+
+JSValue MakeVec2Value(JSContext* ctx, double x, double y) {
+    return MakeFastVec(ctx, x, y, 0.0, 0.0, 2);
 }
 
 JSValue EngineGetterFrametime(JSContext* ctx, JSValueConst /*this_val*/, int /*argc*/,
@@ -1107,10 +1125,28 @@ void SetVec3Fields(JSContext* ctx, JSValueConst obj, double x, double y, double 
 }
 
 void UpdateInputObject(JSContext* ctx) {
-    auto*       host  = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    const auto& fi    = host->inputs;
-    JSValue     g     = JS_GetGlobalObject(ctx);
-    JSValue     input = JS_GetPropertyStr(ctx, g, "input");
+    auto*             host  = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    const auto&       fi    = host->inputs;
+    const CursorWorld world = CursorToWorld(fi);
+    if (host->has_synced_inputs) {
+        const auto& prev = host->last_synced_inputs;
+        if (fi.cursor_x == prev.cursor_x && fi.cursor_y == prev.cursor_y &&
+            fi.screen_w == prev.screen_w && fi.screen_h == prev.screen_h &&
+            fi.mouse_buttons_down == prev.mouse_buttons_down &&
+            fi.mouse_buttons_pressed == prev.mouse_buttons_pressed &&
+            fi.mouse_buttons_released == prev.mouse_buttons_released &&
+            fi.cursor_in_window == prev.cursor_in_window &&
+            world.x == host->last_synced_world_x && world.y == host->last_synced_world_y) {
+            return;
+        }
+    }
+    host->has_synced_inputs   = true;
+    host->last_synced_inputs  = fi;
+    host->last_synced_world_x = world.x;
+    host->last_synced_world_y = world.y;
+
+    JSValue g     = JS_GetGlobalObject(ctx);
+    JSValue input = JS_GetPropertyStr(ctx, g, "input");
     if (! JS_IsObject(input)) {
         JS_FreeValue(ctx, input);
         JS_FreeValue(ctx, g);
@@ -1122,8 +1158,7 @@ void UpdateInputObject(JSContext* ctx) {
         SetVec2Fields(ctx, screen, fi.cursor_x * fi.screen_w, fi.cursor_y * fi.screen_h);
     JS_FreeValue(ctx, screen);
 
-    const CursorWorld world = CursorToWorld(fi);
-    JSValue           wp    = JS_GetPropertyStr(ctx, input, "cursorWorldPosition");
+    JSValue wp = JS_GetPropertyStr(ctx, input, "cursorWorldPosition");
     if (JS_IsObject(wp)) SetVec3Fields(ctx, wp, world.x, world.y, 0.0);
     JS_FreeValue(ctx, wp);
 
@@ -1473,19 +1508,30 @@ globalThis.createScriptProperties = function () {
     // wallpapers (e.g. workshop 3327063360) wire `min:-1,max:1` sliders
     // into scripts declaring `min:0,max:1` and rely on the negative
     // values reaching the formula to shift origin off-parent.
-    for (const d of _props) {
-      if (d && d.name) {
-        Object.defineProperty(target, d.name, {
-          enumerable: true,
-          configurable: true,
-          get() {
-            if (Object.prototype.hasOwnProperty.call(_hostValues, d.name))
-              return coerceDescriptorValue(d, unwrapUserProp(_hostValues[d.name]));
-            return d.value;
-          },
-        });
+    target.__refreshHostValues = function () {
+      for (const d of _props) {
+        if (!d || !d.name) continue;
+        const resolved = Object.prototype.hasOwnProperty.call(_hostValues, d.name)
+          ? coerceDescriptorValue(d, unwrapUserProp(_hostValues[d.name]))
+          : d.value;
+        if (d.kind === 'Color' && resolved instanceof globalThis.Vec3) {
+          const cx = resolved.x, cy = resolved.y, cz = resolved.z;
+          Object.defineProperty(target, d.name, {
+            enumerable: true,
+            configurable: true,
+            get() { return new globalThis.Vec3(cx, cy, cz); },
+          });
+        } else {
+          Object.defineProperty(target, d.name, {
+            value: resolved,
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          });
+        }
       }
-    }
+    };
+    target.__refreshHostValues();
     target.__descriptors = _props;
     target.__hostValues  = _hostValues;
     return target;
@@ -2076,11 +2122,20 @@ inline owe::SceneNode* GetLayerNode(JSValueConst value) {
 }
 
 JSValue WrapLayerNode(JSContext* ctx, owe::SceneNode* node, bool property_object = false) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (! property_object && node != nullptr && host != nullptr) {
+        auto it = host->layer_wrappers.find(node);
+        if (it != host->layer_wrappers.end()) {
+            return JS_DupValue(ctx, it->second);
+        }
+    }
     JSValue obj = JS_NewObjectClass(ctx, s_layer_class_id);
     if (JS_IsException(obj)) return obj;
-    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     JS_SetOpaque(
         obj, new LayerHandle { .host = host, .node = node, .property_object = property_object });
+    if (! property_object && node != nullptr && host != nullptr) {
+        host->layer_wrappers.emplace(node, JS_DupValue(ctx, obj));
+    }
     return obj;
 }
 
@@ -2196,31 +2251,17 @@ JSValue EffectSetVisible(JSContext* ctx, JSValueConst this_val, JSValueConst val
 }
 
 inline JSValue MakeVec3(JSContext* ctx, double x, double y, double z) {
-    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    if (JS_IsUndefined(host->vec3_ctor)) {
-        JSValue g       = JS_GetGlobalObject(ctx);
-        host->vec3_ctor = JS_GetPropertyStr(ctx, g, "Vec3");
-        JS_FreeValue(ctx, g);
-    }
-    JSValue args[3] {
-        JS_NewFloat64(ctx, x),
-        JS_NewFloat64(ctx, y),
-        JS_NewFloat64(ctx, z),
-    };
-    JSValue r = JS_CallConstructor(ctx, host->vec3_ctor, 3, args);
-    JS_FreeValue(ctx, args[0]);
-    JS_FreeValue(ctx, args[1]);
-    JS_FreeValue(ctx, args[2]);
-    return r;
+    return MakeFastVec(ctx, x, y, z, 0.0, 3);
 }
 
 inline bool ReadXYZ(JSContext* ctx, JSValueConst v, double& x, double& y, double& z) {
     if (! JS_IsObject(v)) return false;
-    JSValue jx = JS_GetPropertyStr(ctx, v, "x");
-    JSValue jy = JS_GetPropertyStr(ctx, v, "y");
-    JSValue jz = JS_GetPropertyStr(ctx, v, "z");
-    bool    ok = (JS_ToFloat64(ctx, &x, jx) == 0) && (JS_ToFloat64(ctx, &y, jy) == 0) &&
-                 (JS_ToFloat64(ctx, &z, jz) == 0);
+    auto*   host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    JSValue jx   = host ? JS_GetProperty(ctx, v, host->atoms.x) : JS_GetPropertyStr(ctx, v, "x");
+    JSValue jy   = host ? JS_GetProperty(ctx, v, host->atoms.y) : JS_GetPropertyStr(ctx, v, "y");
+    JSValue jz   = host ? JS_GetProperty(ctx, v, host->atoms.z) : JS_GetPropertyStr(ctx, v, "z");
+    bool    ok   = (JS_ToFloat64(ctx, &x, jx) == 0) && (JS_ToFloat64(ctx, &y, jy) == 0) &&
+                   (JS_ToFloat64(ctx, &z, jz) == 0);
     JS_FreeValue(ctx, jx);
     JS_FreeValue(ctx, jy);
     JS_FreeValue(ctx, jz);
@@ -2229,9 +2270,12 @@ inline bool ReadXYZ(JSContext* ctx, JSValueConst v, double& x, double& y, double
 
 inline bool ReadXY(JSContext* ctx, JSValueConst value, double& x, double& y) {
     if (! JS_IsObject(value)) return false;
-    JSValue    js_x = JS_GetPropertyStr(ctx, value, "x");
-    JSValue    js_y = JS_GetPropertyStr(ctx, value, "y");
-    const bool ok   = JS_ToFloat64(ctx, &x, js_x) == 0 && JS_ToFloat64(ctx, &y, js_y) == 0;
+    auto*   host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    JSValue js_x =
+        host ? JS_GetProperty(ctx, value, host->atoms.x) : JS_GetPropertyStr(ctx, value, "x");
+    JSValue js_y =
+        host ? JS_GetProperty(ctx, value, host->atoms.y) : JS_GetPropertyStr(ctx, value, "y");
+    const bool ok = JS_ToFloat64(ctx, &x, js_x) == 0 && JS_ToFloat64(ctx, &y, js_y) == 0;
     JS_FreeValue(ctx, js_x);
     JS_FreeValue(ctx, js_y);
     return ok;
@@ -2246,20 +2290,39 @@ Option<ShaderValue> ReadShaderValue(JSContext* ctx, JSValueConst value) {
     if (JS_IsBool(value)) return Some(ShaderValue(JS_ToBool(ctx, value) != 0 ? 1.0f : 0.0f));
     if (! JS_IsObject(value)) return None();
 
-    constexpr rstd::array<const char*, 4> fields { "x", "y", "z", "w" };
-    rstd::array<float, 4>                 values {};
-    usize                                 count {};
-    for (const char* field : fields) {
-        JSValue component = JS_GetPropertyStr(ctx, value, field);
-        if (JS_IsUndefined(component)) {
+    auto*                 host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    rstd::array<float, 4> values {};
+    usize                 count {};
+    if (host != nullptr) {
+        const JSAtom atom_fields[4] {
+            host->atoms.x, host->atoms.y, host->atoms.z, host->atoms.w
+        };
+        for (JSAtom field : atom_fields) {
+            JSValue component = JS_GetProperty(ctx, value, field);
+            if (JS_IsUndefined(component)) {
+                JS_FreeValue(ctx, component);
+                break;
+            }
+            double     number {};
+            const bool ok = JS_ToFloat64(ctx, &number, component) == 0;
             JS_FreeValue(ctx, component);
-            break;
+            if (! ok) return None();
+            values[count++] = static_cast<float>(number);
         }
-        double     number {};
-        const bool ok = JS_ToFloat64(ctx, &number, component) == 0;
-        JS_FreeValue(ctx, component);
-        if (! ok) return None();
-        values[count++] = static_cast<float>(number);
+    } else {
+        constexpr rstd::array<const char*, 4> fields { "x", "y", "z", "w" };
+        for (const char* field : fields) {
+            JSValue component = JS_GetPropertyStr(ctx, value, field);
+            if (JS_IsUndefined(component)) {
+                JS_FreeValue(ctx, component);
+                break;
+            }
+            double     number {};
+            const bool ok = JS_ToFloat64(ctx, &number, component) == 0;
+            JS_FreeValue(ctx, component);
+            if (! ok) return None();
+            values[count++] = static_cast<float>(number);
+        }
     }
     if (count == usize()) return None();
     return Some(ShaderValue(values.data(), count));
@@ -2786,7 +2849,7 @@ JSValue NodeGetLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
     }
     const char* name = JS_ToCString(ctx, argv[0]);
     if (! name) return JS_DupValue(ctx, host->default_layer);
-    std::string     layer_name { name };
+    std::string_view layer_name { name };
     FieldScript::Impl::GetLayerCosts* probe = nullptr;
     if (auto* active = host->active_field_script;
         active && active->m_impl->rt->script_costs.enabled) {
@@ -2797,11 +2860,18 @@ JSValue NodeGetLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
     owe::SceneNode* hit = n ? n->FindByName(layer_name) : nullptr;
     if (probe) lookup_finished = std::chrono::steady_clock::now();
     TraceDependency(ctx, "lookup", layer_name, hit);
-    JS_FreeCString(ctx, name);
     JSValue result;
-    if (hit) result = WrapLayerNode(ctx, hit);
-    else if (host && host->scene_root) result = JS_NULL;
-    else result = WrapLayerName(ctx, std::move(layer_name));
+    if (hit) {
+        JS_FreeCString(ctx, name);
+        result = WrapLayerNode(ctx, hit);
+    } else if (host && host->scene_root) {
+        JS_FreeCString(ctx, name);
+        result = JS_NULL;
+    } else {
+        std::string owned_name { layer_name };
+        JS_FreeCString(ctx, name);
+        result = WrapLayerName(ctx, std::move(owned_name));
+    }
     if (probe) {
         const auto finished = std::chrono::steady_clock::now();
         ++probe->calls;
@@ -4085,7 +4155,12 @@ JSValue OfflineUnsupported(JSContext* ctx, JSValueConst, int argc, JSValueConst*
 }
 
 void InstallOfflineGlobals(JSContext* ctx) {
+    auto*   host   = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx,
+                      global,
+                      "__wwOfflineTraceScene",
+                      JS_NewBool(ctx, host && host->offline && host->offline->trace_scene));
     JS_SetPropertyStr(ctx, global, "__wwOfflineNow", JS_NewCFunction(ctx, OfflineNow, "offlineNow", 0));
     JS_SetPropertyStr(ctx, global, "__wwOfflinePerformanceNow",
         JS_NewCFunction(ctx, OfflinePerformanceNow, "offlinePerformanceNow", 0));
@@ -4104,10 +4179,12 @@ void InstallOfflineGlobals(JSContext* ctx) {
     constexpr const char* source = R"JS(
 (() => {
   const NativeDate = globalThis.Date;
-  const inputRead = globalThis.__wwOfflineInputRead;
-  globalThis.input = new Proxy(globalThis.input, {get(target, key, receiver) {
-    inputRead(); return Reflect.get(target, key, receiver);
-  }});
+  if (globalThis.__wwOfflineTraceScene) {
+    const inputRead = globalThis.__wwOfflineInputRead;
+    globalThis.input = new Proxy(globalThis.input, {get(target, key, receiver) {
+      inputRead(); return Reflect.get(target, key, receiver);
+    }});
+  }
   const now = globalThis.__wwOfflineNow;
   const unsupported = globalThis.__wwOfflineUnsupported;
   // 没写时区的日期串按本地时间解析（ECMAScript 规定，官方同此）。离线本地时区固定为 UTC：
@@ -4150,16 +4227,18 @@ void InstallOfflineGlobals(JSContext* ctx) {
   globalThis.performance = { now: globalThis.__wwOfflinePerformanceNow, timeOrigin: now() };
   // 官方 IEngine 成员（docs.wallpaperengine.io scene/scenescript/reference/class/IEngine）缺实现才算不支持；
   // 官方也没有的键（如 engine.on）按官方读成 undefined，由脚本自己的异常走 source_script_errors。
-  const officialEngine = new Set(['screenResolution','canvasSize','userProperties','timeOfDay','frametime','runtime',
+  const officialEngine = ['screenResolution','canvasSize','userProperties','timeOfDay','frametime','runtime',
     'AUDIO_RESOLUTION_16','AUDIO_RESOLUTION_32','AUDIO_RESOLUTION_64','isDesktopDevice','isMobileDevice','isWallpaper',
     'isScreensaver','isPortrait','isLandscape','isRunningInEditor','openUserShortcut','registerAudioBuffers',
-    'registerAsset','setTimeout','setInterval']);
-  globalThis.engine = new Proxy(globalThis.engine, {
-    get(target, key, receiver) {
-      if (officialEngine.has(key) && !(key in target)) unsupported('engine.' + key);
-      return Reflect.get(target, key, receiver);
+    'registerAsset','setTimeout','setInterval'];
+  for (const key of officialEngine) {
+    if (!(key in globalThis.engine)) {
+      Object.defineProperty(globalThis.engine, key, {
+        get: () => unsupported('engine.' + key),
+        configurable: true
+      });
     }
-  });
+  }
   for (const name of ['fetch','XMLHttpRequest','WebSocket','Worker'])
     globalThis[name] = function() { return unsupported(name); };
 })();
@@ -4251,7 +4330,17 @@ JsRuntime::~JsRuntime() {
     for (auto& [_sha, ns] : m_impl->ns_by_sha) JS_FreeValue(m_impl->ctx, ns);
     m_impl->ns_by_sha.clear();
     if (! JS_IsUndefined(m_impl->wrapped_scene)) JS_FreeValue(m_impl->ctx, m_impl->wrapped_scene);
+    for (auto& [_node, wrapper] : m_impl->host.layer_wrappers) {
+        JS_FreeValue(m_impl->ctx, wrapper);
+    }
+    m_impl->host.layer_wrappers.clear();
     if (! JS_IsUndefined(m_impl->host.vec3_ctor)) JS_FreeValue(m_impl->ctx, m_impl->host.vec3_ctor);
+    if (! JS_IsUndefined(m_impl->host.vec2_proto))
+        JS_FreeValue(m_impl->ctx, m_impl->host.vec2_proto);
+    if (! JS_IsUndefined(m_impl->host.vec3_proto))
+        JS_FreeValue(m_impl->ctx, m_impl->host.vec3_proto);
+    if (! JS_IsUndefined(m_impl->host.vec4_proto))
+        JS_FreeValue(m_impl->ctx, m_impl->host.vec4_proto);
     if (! JS_IsUndefined(m_impl->host.default_layer))
         JS_FreeValue(m_impl->ctx, m_impl->host.default_layer);
     if (! JS_IsUndefined(m_impl->host.default_scene))
@@ -4314,6 +4403,16 @@ void JsRuntime::SetUserProperty(std::string_view key, const NJson& property) {
         auto* fs = m_impl->scripts[script_index].get();
         auto* I  = fs->m_impl.get();
         if (! I->alive) continue;
+        JSValue sp = JS_GetPropertyStr(ctx, I->module_ns, "scriptProperties");
+        if (JS_IsObject(sp)) {
+            JSValue refresh = JS_GetPropertyStr(ctx, sp, "__refreshHostValues");
+            if (JS_IsFunction(ctx, refresh)) {
+                JSValue rr = JS_Call(ctx, refresh, sp, 0, nullptr);
+                JS_FreeValue(ctx, rr);
+            }
+            JS_FreeValue(ctx, refresh);
+        }
+        JS_FreeValue(ctx, sp);
         JSValue fn = JS_GetPropertyStr(ctx, I->module_ns, "applyUserProperties");
         if (JS_IsFunction(ctx, fn)) {
             BindFieldScriptContext(ctx, *I, m_impl->host.default_layer);
@@ -4430,12 +4529,22 @@ void JsRuntime::RegisterAnimationLayer(owe::SceneNode* node, Arc<owe::PuppetLaye
 void JsRuntime::SetSceneRoot(owe::SceneNode* root) {
     if (! m_impl || ! m_impl->ctx) return;
     if (! JS_IsUndefined(m_impl->wrapped_scene)) JS_FreeValue(m_impl->ctx, m_impl->wrapped_scene);
-    if (m_impl->host.scene_root != root)
+    if (m_impl->host.scene_root != root) {
         m_impl->host.public_layers.erase(
             std::remove_if(m_impl->host.public_layers.begin(),
                            m_impl->host.public_layers.end(),
                            [root](auto* node) { return ! SceneTreeContains(root, node); }),
             m_impl->host.public_layers.end());
+        for (auto it = m_impl->host.layer_wrappers.begin();
+             it != m_impl->host.layer_wrappers.end();) {
+            if (! SceneTreeContains(root, it->first)) {
+                JS_FreeValue(m_impl->ctx, it->second);
+                it = m_impl->host.layer_wrappers.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
     m_impl->scene_root      = root;
     m_impl->host.scene_root = root;
     m_impl->wrapped_scene   = root ? WrapLayerNode(m_impl->ctx, root) : JS_UNDEFINED;
@@ -4964,6 +5073,12 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
                 JS_DefinePropertyValueStr(
                     ctx, hv, key.c_str(), ResolveConfigValue(ctx, value), JS_PROP_C_W_E);
             }
+            JSValue refresh = JS_GetPropertyStr(ctx, sp, "__refreshHostValues");
+            if (JS_IsFunction(ctx, refresh)) {
+                JSValue rr = JS_Call(ctx, refresh, sp, 0, nullptr);
+                JS_FreeValue(ctx, rr);
+            }
+            JS_FreeValue(ctx, refresh);
         }
         JS_FreeValue(ctx, hv);
     }

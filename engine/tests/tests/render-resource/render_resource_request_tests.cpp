@@ -759,7 +759,8 @@ TEST(UniformBufferBinding, OrdersSourcesAndSkipsUnchangedVersions) {
     ++low_state->version;
     ASSERT_TRUE(update->Update(frame, writer_trait).is_ok());
 
-    EXPECT_EQ(writer.update_count, rstd::u64(2));
+    // The higher-priority source still produces the same bytes.
+    EXPECT_EQ(writer.update_count, rstd::u64(1));
     ASSERT_EQ(writer.bytes.size(), 4u);
     float value = 0.0f;
     std::memcpy(&value, writer.bytes.data(), writer.bytes.size());

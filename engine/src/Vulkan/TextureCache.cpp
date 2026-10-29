@@ -385,13 +385,48 @@ Option<VmaImageParameters> TextureCache::CreateTex(TextureKey tex_key, bool init
     return None();
 }
 
+namespace
+{
+
+bool SameTextureKey(const TextureKey& a, const TextureKey& b) noexcept {
+    return a.width == b.width && a.height == b.height && a.usage == b.usage &&
+           a.format == b.format && a.mipmap_level == b.mipmap_level && a.samples == b.samples &&
+           a.sample.wrapS == b.sample.wrapS && a.sample.wrapT == b.sample.wrapT &&
+           a.sample.magFilter == b.sample.magFilter && a.sample.minFilter == b.sample.minFilter &&
+           a.sample.compare_enable == b.sample.compare_enable &&
+           a.sample.compare_op == b.sample.compare_op &&
+           a.sample.border_color == b.sample.border_color;
+}
+
+} // namespace
+
 Option<rstd::sync::Arc<TextureAllocation>> TextureCache::AllocateTexture(TextureKey key,
                                                                        bool initialize_layout) {
-    auto image = CreateTex(rstd::move(key), initialize_layout);
+    for (auto& entry : m_rt_pool) {
+        if (entry.allocation.strong_count() == usize(1) && SameTextureKey(entry.key, key) &&
+            (! initialize_layout || entry.layout_initialized)) {
+            return Some(entry.allocation.clone());
+        }
+    }
+    auto image = CreateTex(key, initialize_layout);
     if (image.is_none()) return None();
     ImageSlots slots;
     slots.slots.push_back(rstd::move(image).unwrap());
-    return Some(rstd::sync::Arc<TextureAllocation>::make(rstd::move(slots)));
+    auto allocation = rstd::sync::Arc<TextureAllocation>::make(rstd::move(slots));
+    if (m_rt_pool.len() >= usize(256)) {
+        for (usize i {}; i < m_rt_pool.len(); ++i) {
+            if (m_rt_pool[i].allocation.strong_count() == usize(1)) {
+                (void)m_rt_pool.remove(i);
+                break;
+            }
+        }
+    }
+    m_rt_pool.push(PooledRenderTarget {
+        .key                = rstd::move(key),
+        .layout_initialized = initialize_layout,
+        .allocation         = allocation.clone(),
+    });
+    return Some(rstd::move(allocation));
 }
 
 /* ===========================================================================
@@ -1021,6 +1056,7 @@ void TextureCache::SetVideoDecodeOptions(VideoDecodeOptions options) {
 }
 
 void TextureCache::Clear() {
+    m_rt_pool.clear();
     if (m_video_registry.is_some()) m_video_registry->get()->runtimes.clear();
 }
 

@@ -220,10 +220,9 @@ TEST(ScriptFaultIsolation, ModuleFaultKeepsPeerRunningAndPreservesUnsupportedFat
 
     owe::Services unsupported_offline;
     JsRuntime     unsupported_runtime(&unsupported_offline);
-    // Simulate a missing documented IEngine member without relying on a
-    // production capability gap. A missing official API must still be fatal.
+    // Exercise a real unsupported offline operation during module evaluation.
     EXPECT_NE(unsupported_runtime.MakeFieldScript(
-                  "delete engine.runtime; const value = engine.runtime;",
+                  "fetch();",
                   "test/module_unsupported_fatal",
                   FieldKind::Scalar,
                   owe::NJson::object(),
@@ -233,7 +232,7 @@ TEST(ScriptFaultIsolation, ModuleFaultKeepsPeerRunningAndPreservesUnsupportedFat
     EXPECT_TRUE(unsupported_offline.failed);
     ASSERT_EQ(unsupported_offline.source_script_errors.size(), 1u);
     EXPECT_NE(unsupported_offline.source_script_errors.front().message.find(
-                  "Unsupported offline API: engine.runtime"),
+                  "Unsupported offline API: fetch"),
               std::string::npos);
 }
 

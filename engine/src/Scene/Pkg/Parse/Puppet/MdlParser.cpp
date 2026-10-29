@@ -1524,7 +1524,8 @@ Option<usize> MdlParser::FindMeshByMaterial(const Mdl& mdl, ref<str> material_re
 }
 
 void MdlParser::GenMeshFromMdl(SceneMesh::Submesh& submesh, const Mdl::Mesh& src,
-                               array<float, 2> texcoord_scale, array<float, 3> position_offset) {
+                               array<float, 2> texcoord_scale, array<float, 3> position_offset,
+                               bool split_streams) {
     const size_t vert_num = src.positions.len().to_primitive();
     if (vert_num == 0) return;
     if (! src.part_uv2.is_empty() || ! src.parts.is_empty()) {
@@ -1532,88 +1533,116 @@ void MdlParser::GenMeshFromMdl(SceneMesh::Submesh& submesh, const Mdl::Mesh& src
         texcoord_scale = { 1.0f, 1.0f };
     }
 
-    // Build the attribute list in a stable order. Skinning attrs come early so
-    // a puppet vertex layout matches what WE shaders historically expect.
-    std::vector<VertexAttrSpec>                      specs;
-    std::vector<std::function<void(size_t, float*)>> packers;
+    const bool has_norm  = ! src.normals.is_empty();
+    const bool has_tan   = ! src.tangents.is_empty();
+    const bool has_blend = ! src.blend_indices.is_empty();
+    const bool has_w     = ! src.blend_weights.is_empty();
+    const bool has_uv    = ! src.texcoords.is_empty();
+    const auto* uv2      = ! src.part_uv2.is_empty()    ? &src.part_uv2
+                         : ! src.texcoord2.is_empty() ? &src.texcoord2
+                                                      : nullptr;
+    const bool has_uv2   = has_uv && uv2 != nullptr && uv2->len() == usize(vert_num);
 
-    // Position is always present (the parser would have failed otherwise).
-    specs.push_back(VAttr::Position);
-    packers.push_back([&src, position_offset](size_t i, float* dst) {
-        dst[0] = src.positions[usize(i)][usize(0)] + position_offset[usize(0)];
-        dst[1] = src.positions[usize(i)][usize(1)] + position_offset[usize(1)];
-        dst[2] = src.positions[usize(i)][usize(2)] + position_offset[usize(2)];
-    });
-    if (! src.normals.is_empty()) {
-        specs.push_back(VAttr::Normal);
-        packers.push_back([&src](size_t i, float* dst) {
-            std::memcpy(dst, src.normals[usize(i)].data(), sizeof(src.normals[usize(i)]));
-        });
-    }
-    if (! src.tangents.is_empty()) {
-        specs.push_back(VAttr::Tangent4);
-        packers.push_back([&src](size_t i, float* dst) {
-            std::memcpy(dst, src.tangents[usize(i)].data(), sizeof(src.tangents[usize(i)]));
-        });
-    }
-    if (! src.blend_indices.is_empty()) {
-        specs.push_back(VAttr::BlendIndices);
-        packers.push_back([&src](size_t i, float* dst) {
-            std::memcpy(
-                dst, src.blend_indices[usize(i)].data(), sizeof(src.blend_indices[usize(i)]));
-        });
-        // SKIN_BLEND without SKIN_WEIGHT is the WE 1-bone rigid convention;
-        // emit synthetic [1,0,0,0] so the SKINNING shader path always has
-        // valid weights to read.
-        specs.push_back(VAttr::BlendWeights);
-        const bool has_w = ! src.blend_weights.is_empty();
-        packers.push_back([&src, has_w](size_t i, float* dst) {
-            if (has_w) {
-                std::memcpy(
-                    dst, src.blend_weights[usize(i)].data(), sizeof(src.blend_weights[usize(i)]));
-            } else {
-                dst[0] = 1.0f;
-                dst[1] = 0.0f;
-                dst[2] = 0.0f;
-                dst[3] = 0.0f;
-            }
-        });
-    }
-    if (! src.texcoords.is_empty()) {
-        specs.push_back(VAttr::TexCoord);
-        packers.push_back([&src, texcoord_scale](size_t i, float* dst) {
-            dst[0] = src.texcoords[usize(i)][usize(0)] * texcoord_scale[usize(0)];
-            dst[1] = src.texcoords[usize(i)][usize(1)] * texcoord_scale[usize(1)];
-        });
-    }
-    const auto* uv2 = ! src.part_uv2.is_empty()    ? &src.part_uv2
-                      : ! src.texcoord2.is_empty() ? &src.texcoord2
-                                                   : nullptr;
-    if (! src.texcoords.is_empty() && uv2 != nullptr && uv2->len() == usize(vert_num)) {
-        specs.push_back(VAttr::TexCoordVec4);
-        packers.push_back([&src, uv2, texcoord_scale](size_t i, float* dst) {
-            dst[0] = src.texcoords[usize(i)][usize(0)] * texcoord_scale[usize(0)];
-            dst[1] = src.texcoords[usize(i)][usize(1)] * texcoord_scale[usize(1)];
-            dst[2] = (*uv2)[usize(i)][usize(0)];
-            dst[3] = (*uv2)[usize(i)][usize(1)];
-        });
-    }
-
-    auto             attrs = MakeAttrSet(specs);
-    SceneVertexArray vertex(attrs, usize(vert_num));
-
-    size_t stride_floats = 0;
-    for (auto& a : attrs) stride_floats += SceneVertexArray::RealAttributeSize(a);
-    std::vector<float> one_vert(stride_floats);
-
-    for (size_t i = 0; i < vert_num; ++i) {
-        size_t offset = 0;
-        for (size_t k = 0; k < packers.size(); ++k) {
-            packers[k](i, one_vert.data() + offset);
-            offset += SceneVertexArray::RealAttributeSize(attrs[k]);
+    if (split_streams) {
+        auto             pos_attrs = MakeAttrSet({ VAttr::Position });
+        SceneVertexArray pos_vertex(pos_attrs, usize(vert_num));
+        float            pos_vert[3];
+        for (size_t i = 0; i < vert_num; ++i) {
+            pos_vert[0] = src.positions[usize(i)][usize(0)] + position_offset[usize(0)];
+            pos_vert[1] = src.positions[usize(i)][usize(1)] + position_offset[usize(1)];
+            pos_vert[2] = src.positions[usize(i)][usize(2)] + position_offset[usize(2)];
+            pos_vertex.SetVertexs(usize(i), rstd::slice<float>::from_raw_parts(pos_vert, usize(3)));
         }
-        vertex.SetVertexs(
-            usize(i), rstd::slice<float>::from_raw_parts(one_vert.data(), usize(one_vert.size())));
+        submesh.vertex_arrays.emplace_back(std::move(pos_vertex));
+    }
+
+    VertexAttrSpec specs[8];
+    size_t         spec_count = 0;
+    if (! split_streams) specs[spec_count++] = VAttr::Position;
+    if (has_norm) specs[spec_count++] = VAttr::Normal;
+    if (! split_streams && has_tan) specs[spec_count++] = VAttr::Tangent4;
+    if (has_blend) {
+        specs[spec_count++] = VAttr::BlendIndices;
+        specs[spec_count++] = VAttr::BlendWeights;
+    }
+    if (has_uv) specs[spec_count++] = VAttr::TexCoord;
+    if (has_uv2) specs[spec_count++] = VAttr::TexCoordVec4;
+
+    if (spec_count > 0) {
+        auto             attrs = MakeAttrSet(std::span<const VertexAttrSpec>(specs, spec_count));
+        SceneVertexArray vertex(attrs, usize(vert_num));
+        size_t           stride_floats = 0;
+        for (auto& a : attrs) stride_floats += SceneVertexArray::RealAttributeSize(a);
+        std::vector<float> one_vert(stride_floats);
+
+        for (size_t i = 0; i < vert_num; ++i) {
+            size_t offset = 0;
+            if (! split_streams) {
+                one_vert[offset + 0] =
+                    src.positions[usize(i)][usize(0)] + position_offset[usize(0)];
+                one_vert[offset + 1] =
+                    src.positions[usize(i)][usize(1)] + position_offset[usize(1)];
+                one_vert[offset + 2] =
+                    src.positions[usize(i)][usize(2)] + position_offset[usize(2)];
+                offset += 4;
+            }
+            if (has_norm) {
+                std::memcpy(one_vert.data() + offset,
+                            src.normals[usize(i)].data(),
+                            sizeof(src.normals[usize(i)]));
+                offset += 4;
+            }
+            if (! split_streams && has_tan) {
+                std::memcpy(one_vert.data() + offset,
+                            src.tangents[usize(i)].data(),
+                            sizeof(src.tangents[usize(i)]));
+                offset += 4;
+            }
+            if (has_blend) {
+                std::memcpy(one_vert.data() + offset,
+                            src.blend_indices[usize(i)].data(),
+                            sizeof(src.blend_indices[usize(i)]));
+                offset += 4;
+                if (has_w) {
+                    std::memcpy(one_vert.data() + offset,
+                                src.blend_weights[usize(i)].data(),
+                                sizeof(src.blend_weights[usize(i)]));
+                } else {
+                    one_vert[offset + 0] = 1.0f;
+                    one_vert[offset + 1] = 0.0f;
+                    one_vert[offset + 2] = 0.0f;
+                    one_vert[offset + 3] = 0.0f;
+                }
+                offset += 4;
+            }
+            if (has_uv) {
+                one_vert[offset + 0] = src.texcoords[usize(i)][usize(0)] * texcoord_scale[usize(0)];
+                one_vert[offset + 1] = src.texcoords[usize(i)][usize(1)] * texcoord_scale[usize(1)];
+                offset += 4;
+            }
+            if (has_uv2) {
+                one_vert[offset + 0] = src.texcoords[usize(i)][usize(0)] * texcoord_scale[usize(0)];
+                one_vert[offset + 1] = src.texcoords[usize(i)][usize(1)] * texcoord_scale[usize(1)];
+                one_vert[offset + 2] = (*uv2)[usize(i)][usize(0)];
+                one_vert[offset + 3] = (*uv2)[usize(i)][usize(1)];
+                offset += 4;
+            }
+            vertex.SetVertexs(
+                usize(i),
+                rstd::slice<float>::from_raw_parts(one_vert.data(), usize(one_vert.size())));
+        }
+        submesh.vertex_arrays.emplace_back(std::move(vertex));
+    }
+
+    if (split_streams && has_tan) {
+        auto             tan_attrs = MakeAttrSet({ VAttr::Tangent4 });
+        SceneVertexArray tan_vertex(tan_attrs, usize(vert_num));
+        for (size_t i = 0; i < vert_num; ++i) {
+            tan_vertex.SetVertexs(
+                usize(i),
+                rstd::slice<float>::from_raw_parts(src.tangents[usize(i)].data(), usize(4)));
+        }
+        submesh.vertex_arrays.emplace_back(std::move(tan_vertex));
     }
 
     std::vector<uint32_t> indices;
@@ -1622,7 +1651,6 @@ void MdlParser::GenMeshFromMdl(SceneMesh::Submesh& submesh, const Mdl::Mesh& src
         for (uint32_t v : tri) indices.push_back(v);
     }
 
-    submesh.vertex_arrays.emplace_back(std::move(vertex));
     submesh.index_arrays.emplace_back(
         SceneIndexArray(slice<uint32_t>::from_raw_parts(indices.data(), usize(indices.size()))));
 

@@ -120,7 +120,8 @@ struct PreparedResourceLeases {
 
 class PreparedResourceTable {
 public:
-    explicit PreparedResourceTable(u64 generation = u64()): m_generation(generation) {}
+    explicit PreparedResourceTable(u64 generation = u64(), usize texture_capacity = usize())
+        : m_generation(generation), m_textures(TextureMap::with_capacity(texture_capacity)) {}
 
     bool Insert(PreparedTexture texture) {
         return m_textures.insert(texture.use, rstd::move(texture)).is_none();
@@ -323,6 +324,40 @@ public:
         m_externals     = rstd::move(previous.m_externals);
     }
 
+    auto ReplaceSectionsForRollback(PreparedResourceTable&&        next,
+                                    resource::ResourcePlanSections prepared_sections)
+        -> PreparedResourceTable {
+        PreparedResourceTable rollback(m_generation);
+        m_generation = next.m_generation;
+        if (resource::ResourcePlanIncludes(prepared_sections, resource::ResourcePlanTextures)) {
+            rollback.m_textures = rstd::move(m_textures);
+            m_textures          = rstd::move(next.m_textures);
+        }
+        if (resource::ResourcePlanIncludes(prepared_sections, resource::ResourcePlanBuffers)) {
+            rollback.m_buffers = rstd::move(m_buffers);
+            m_buffers          = rstd::move(next.m_buffers);
+        }
+        if (resource::ResourcePlanIncludes(prepared_sections, resource::ResourcePlanShaders)) {
+            rollback.m_shaders = rstd::move(m_shaders);
+            m_shaders          = rstd::move(next.m_shaders);
+        }
+        return rollback;
+    }
+
+    void RestoreSectionsFromRollback(PreparedResourceTable&&        rollback,
+                                     resource::ResourcePlanSections prepared_sections) {
+        m_generation = rollback.m_generation;
+        if (resource::ResourcePlanIncludes(prepared_sections, resource::ResourcePlanTextures)) {
+            m_textures = rstd::move(rollback.m_textures);
+        }
+        if (resource::ResourcePlanIncludes(prepared_sections, resource::ResourcePlanBuffers)) {
+            m_buffers = rstd::move(rollback.m_buffers);
+        }
+        if (resource::ResourcePlanIncludes(prepared_sections, resource::ResourcePlanShaders)) {
+            m_shaders = rstd::move(rollback.m_shaders);
+        }
+    }
+
     auto clone() const -> PreparedResourceTable {
         PreparedResourceTable cloned(m_generation);
 
@@ -414,11 +449,21 @@ public:
         m_externals.clear();
     }
 
-    void Remove(resource::PipelineUseHandle use) { (void)m_pipelines.remove(use); }
-    void Remove(resource::RenderPassUseHandle use) { (void)m_render_passes.remove(use); }
-    void Remove(resource::FramebufferUseHandle use) { (void)m_framebuffers.remove(use); }
-    void Remove(resource::DescriptorBindingHandle use) { (void)m_descriptors.remove(use); }
-    void Remove(resource::ExternalUseHandle use) { (void)m_externals.remove(use); }
+    auto Remove(resource::PipelineUseHandle use) -> Option<PreparedPipeline> {
+        return m_pipelines.remove(use);
+    }
+    auto Remove(resource::RenderPassUseHandle use) -> Option<PreparedRenderPass> {
+        return m_render_passes.remove(use);
+    }
+    auto Remove(resource::FramebufferUseHandle use) -> Option<PreparedFramebuffer> {
+        return m_framebuffers.remove(use);
+    }
+    auto Remove(resource::DescriptorBindingHandle use) -> Option<PreparedDescriptorBinding> {
+        return m_descriptors.remove(use);
+    }
+    auto Remove(resource::ExternalUseHandle use) -> Option<PreparedExternalUse> {
+        return m_externals.remove(use);
+    }
 
 private:
     using TextureMap = rstd::collections::HashMap<resource::TextureUseHandle, PreparedTexture>;
@@ -492,7 +537,7 @@ private:
 
     ResourcePrepareSession(const resource::ResourcePlan&  plan,
                            resource::ResourcePlanSections sections)
-        : m_plan(rstd::addressof(plan)), m_sections(sections), m_table(plan.generation) {}
+        : m_plan(rstd::addressof(plan)), m_sections(sections), m_table(plan.generation, plan.textures.len()) {}
 
     const resource::ResourcePlan*                         m_plan;
     resource::ResourcePlanSections                        m_sections;
@@ -539,7 +584,8 @@ public:
           m_shaders(shaders) {}
 
     auto Begin(const resource::ResourcePlan& plan, ResourceContentProviders providers = {},
-               resource::ResourcePlanSections sections = resource::ResourcePlanAll)
+               resource::ResourcePlanSections sections       = resource::ResourcePlanAll,
+               const PreparedResourceTable*   previous_table = nullptr)
         -> Result<ResourcePrepareSession, resource::ResourceError> {
         ResourcePrepareSession   session(plan, sections);
         auto                     texture_provider = rstd::move(providers.texture);
@@ -549,7 +595,7 @@ public:
         };
         if (resource::ResourcePlanIncludes(sections, resource::ResourcePlanTextures)) {
             auto prepared = BeginTextures(
-                plan.textures.as_slice(), session, rstd::move(texture_provider));
+                plan.textures.as_slice(), session, rstd::move(texture_provider), previous_table);
             if (prepared.is_err()) return Err(rstd::move(prepared).unwrap_err_unchecked());
         }
         ResourcePlanPrepareVisitor visitor(*this, session.m_table, rstd::move(remaining));
@@ -628,15 +674,29 @@ public:
     }
 
     auto BeginTextures(slice<resource::TexturePlanEntry> entries, ResourcePrepareSession& session,
-                       Option<resource::TextureContentProvider*> content)
+                       Option<resource::TextureContentProvider*> content,
+                       const PreparedResourceTable*              previous_table = nullptr)
         -> Result<empty, resource::ResourceError> {
         auto pending_index =
             rstd::collections::HashMap<resource::ImportedTextureContentIdentity, usize>::make();
+        auto deferred_fast_entries = Vec<usize>::make();
+        if (previous_table != nullptr) {
+            deferred_fast_entries.reserve(entries.len());
+        }
 
         for (usize entry_index {}; entry_index < entries.len(); ++entry_index) {
-            const auto& entry              = entries[entry_index];
-            auto        imported_content   = None<resource::ImportedTextureContentIdentity>();
-            auto        allocation_request = entry.request.clone();
+            const auto& entry = entries[entry_index];
+            if (previous_table != nullptr) {
+                auto prev = previous_table->Resolve(entry.handle);
+                if (prev.is_some() &&
+                    resource::SameTextureRequest((**prev).request, entry.request) &&
+                    m_textures.ResolveCurrent((**prev).resource).is_some()) {
+                    deferred_fast_entries.emplace_back(entry_index);
+                    continue;
+                }
+            }
+            auto imported_content   = None<resource::ImportedTextureContentIdentity>();
+            auto allocation_request = entry.request.clone();
             if (! entry.allocation_key.is_empty()) {
                 allocation_request.name = entry.allocation_key.clone();
             }
@@ -733,6 +793,39 @@ public:
                 .resource = handle,
                 .request  = entry.request.clone(),
             });
+        }
+        for (usize fast_idx {}; fast_idx < deferred_fast_entries.len(); ++fast_idx) {
+            const auto& entry = entries[deferred_fast_entries[fast_idx]];
+            auto        prev  = previous_table->Resolve(entry.handle);
+            if (prev.is_none()) continue;
+            const auto& prev_tex = **prev;
+            auto        physical = m_textures.ResolveCurrent(prev_tex.resource);
+            if (physical.is_none()) physical = m_textures.ResolvePending(prev_tex.resource);
+            if (physical.is_some()) {
+                if ((**physical).generation == prev_tex.physical_generation) {
+                    if (! session.m_table.Insert(PreparedTexture {
+                            .use                 = entry.handle,
+                            .resource            = prev_tex.resource,
+                            .request             = prev_tex.request.clone(),
+                            .physical            = prev_tex.physical.clone(),
+                            .image               = prev_tex.image,
+                            .physical_generation = prev_tex.physical_generation,
+                            .ready               = prev_tex.ready,
+                        })) {
+                        return Err(resource::ResourceError {
+                            .kind    = resource::ResourceErrorKind::BackendFailure,
+                            .message = rstd::format("duplicate texture use {}", entry.handle.index),
+                        });
+                    }
+                } else {
+                    auto inserted = InsertPrepared(entry.handle,
+                                                   prev_tex.resource,
+                                                   entry.request.clone(),
+                                                   **physical,
+                                                   session.m_table);
+                    if (inserted.is_err()) return inserted;
+                }
+            }
         }
         if (session.m_pending.is_empty()) return Ok(empty {});
         auto loader = (*content)->OpenTextureLoader();

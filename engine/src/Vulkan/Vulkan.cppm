@@ -414,6 +414,13 @@ private:
     u64                m_next_image_generation { 1 };
     std::uint64_t      m_video_observation_tick { 0 };
 
+    struct PooledRenderTarget {
+        TextureKey                         key;
+        bool                               layout_initialized { false };
+        rstd::sync::Arc<TextureAllocation> allocation;
+    };
+    rstd::vec::Vec<PooledRenderTarget> m_rt_pool;
+
     /* Opaque pImpl for the active video-tex set. Defined inside
      * TextureCache.cpp to keep the video decoding types out of the public
      * wescene.vulkan module interface. */

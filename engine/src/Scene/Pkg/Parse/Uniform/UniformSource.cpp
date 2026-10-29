@@ -41,6 +41,33 @@ auto MakeArcUniformBindingLease(const Arc<T>& state) -> Option<std::unique_ptr<U
         std::make_unique<ArcUniformBindingLease<T>>(state.clone())));
 }
 
+struct UniformStateHasher {
+    rstd::uint64_t state { 14695981039346656037ULL };
+
+    void WriteBytes(const void* data, std::size_t len) noexcept {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        for (std::size_t index = 0; index < len; ++index) {
+            state ^= static_cast<rstd::uint64_t>(bytes[index]);
+            state *= 1099511628211ULL;
+        }
+    }
+
+    template<typename T>
+    void Write(const T& value) noexcept {
+        WriteBytes(&value, sizeof(T));
+    }
+
+    auto Finish() const noexcept -> u64 {
+        auto mixed = state;
+        mixed ^= mixed >> 30U;
+        mixed *= 0xbf58476d1ce4e5b9ULL;
+        mixed ^= mixed >> 27U;
+        mixed *= 0x94d049bb133111ebULL;
+        mixed ^= mixed >> 31U;
+        return mixed == 0ULL ? u64(1) : u64(mixed);
+    }
+};
+
 float Smooth(float value) { return value * value * (3.0f - 2.0f * value); }
 
 template<typename T>
@@ -582,7 +609,84 @@ auto TransformUniformSource::Describe(UniformBindingSink* sink) const
 }
 
 auto TransformUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
-    return context->Frame()->revision;
+    const auto frame       = context->Frame();
+    const auto render_view = context->RenderView();
+    if (m_cached_version != u64() && m_cached_frame_revision == frame->revision &&
+        m_cached_view == render_view) {
+        return m_cached_version;
+    }
+
+    auto camera_ref = m_node->camera_resolver->Resolve(*m_node->node);
+    if (camera_ref.is_none()) return u64(1);
+
+    UniformStateHasher hasher;
+    auto&              node   = *m_node->node;
+    auto&              camera = **camera_ref;
+    node.UpdateTrans();
+
+    hasher.Write(render_view);
+    const Matrix4d view_projection = camera.GetViewProjectionMatrix(render_view);
+    hasher.WriteBytes(view_projection.data(), sizeof(double) * 16);
+    const bool camera_persp = camera.IsPerspective();
+    hasher.Write(camera_persp);
+
+    const auto& shake             = m_state->CameraShake();
+    auto        active_camera_ref = m_node->camera_resolver->Active();
+    const bool  active_camera     = (*camera_ref).as_raw_ptr() == active_camera_ref.as_raw_ptr();
+    if (shake.enable && active_camera && ! camera_persp && shake.amplitude > 0.0f &&
+        shake.speed > 0.0f) {
+        hasher.Write(m_state->Ortho());
+        hasher.Write(shake.amplitude);
+        hasher.Write(shake.speed);
+        hasher.Write(shake.roughness);
+        hasher.Write(frame->elapsed.to_primitive());
+    }
+
+    const bool has_eye_override = m_node->eye_position_override.is_some();
+    hasher.Write(has_eye_override);
+    if (has_eye_override) {
+        hasher.Write(*m_node->eye_position_override);
+    } else if (m_node->use_camera_eye_position || camera_persp) {
+        const auto pos = camera.GetPosition(render_view);
+        hasher.WriteBytes(pos.data(), sizeof(double) * 3);
+    }
+
+    hasher.Write(m_node->vertices_in_world_space);
+    if (! m_node->vertices_in_world_space) {
+        hasher.WriteBytes(node.ModelTrans().data(), sizeof(double) * 16);
+    }
+    hasher.WriteBytes(node.GeometryTransform().data(), sizeof(double) * 16);
+    if (auto* mesh = node.Mesh(); mesh != nullptr) {
+        hasher.WriteBytes(mesh->GeometryTransform().data(), sizeof(double) * 16);
+    }
+
+    const auto& parallax = m_state->CameraParallax();
+    auto        attached = camera.GetAttachedNode();
+    const bool  own_image_effect =
+        attached.is_some() && (*attached)->HasLayer() && *attached == m_node->node.as_ptr();
+    const bool apply_model_parallax =
+        node.Camera() != "effect" && parallax.enable && ! own_image_effect;
+    hasher.Write(apply_model_parallax);
+    if (apply_model_parallax) {
+        const auto shift = m_state->ComputeParallaxOffset(*m_node, camera, render_view);
+        hasher.Write(shift);
+    }
+
+    const bool has_effect_proj = m_node->effect_projection_node.is_some();
+    hasher.Write(has_effect_proj);
+    if (has_effect_proj) {
+        auto& source = **m_node->effect_projection_node;
+        source.UpdateTrans();
+        hasher.WriteBytes(source.ModelTrans().data(), sizeof(double) * 16);
+        hasher.Write(m_node->effect_projection_size);
+        const Matrix4d effect_view = active_camera_ref->GetViewProjectionMatrix(render_view);
+        hasher.WriteBytes(effect_view.data(), sizeof(double) * 16);
+    }
+
+    m_cached_frame_revision = frame->revision;
+    m_cached_view           = render_view;
+    m_cached_version        = hasher.Finish();
+    return m_cached_version;
 }
 
 auto TransformUniformSource::Evaluate(const UniformUpdateContext* context,
@@ -840,8 +944,29 @@ auto ColorUniformSource::Describe(UniformBindingSink* sink) const
     return BindEntries(sink, entries);
 }
 
-auto ColorUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
-    return context->Frame()->revision;
+auto ColorUniformSource::Version(const UniformUpdateContext*) const -> u64 {
+    UniformStateHasher hasher;
+    const auto&        node         = *m_node;
+    const bool         alpha_over   = node.IsAlphaOverridden();
+    const bool         color_over   = node.IsColorOverridden();
+    const bool         bright_over  = node.IsBrightnessOverridden();
+    hasher.Write(alpha_over);
+    hasher.Write(color_over);
+    hasher.Write(bright_over);
+    if (alpha_over) {
+        hasher.Write(node.EffectiveAlpha());
+    }
+    hasher.Write(node.BaseAlpha());
+    if (color_over) {
+        const auto& c = node.Color();
+        hasher.WriteBytes(c.data(), sizeof(float) * 3);
+    }
+    const auto& bc = node.BaseColor();
+    hasher.WriteBytes(bc.data(), sizeof(float) * 3);
+    if (bright_over) {
+        hasher.Write(node.Brightness());
+    }
+    return hasher.Finish();
 }
 
 auto ColorUniformSource::Evaluate(const UniformUpdateContext*,
@@ -886,8 +1011,34 @@ auto LightUniformSource::Describe(UniformBindingSink* sink) const
     return BindGlobalProducer(sink, GlobalUniformProducer::Light);
 }
 
-auto LightUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
-    return context->Frame()->revision;
+auto LightUniformSource::Version(const UniformUpdateContext*) const -> u64 {
+    UniformStateHasher hasher;
+    constexpr usize    max_lights { 4 };
+    for (usize index {}; index < rstd::cmp::min(max_lights, m_lights.len()); ++index) {
+        const auto& light   = *m_lights[index];
+        const bool  visible = light.node() != nullptr && light.runtimeVisible();
+        hasher.Write(visible);
+        if (! visible) continue;
+        auto& node = *light.node();
+        node.UpdateTrans();
+        hasher.WriteBytes(node.ModelTrans().data(), sizeof(double) * 16);
+        const auto& color = light.color();
+        hasher.WriteBytes(color.data(), sizeof(float) * 3);
+        const bool color_over = node.IsColorOverridden();
+        hasher.Write(color_over);
+        if (color_over) {
+            const auto& nc = node.Color();
+            hasher.WriteBytes(nc.data(), sizeof(float) * 3);
+        }
+        hasher.Write(light.desc().intensity);
+        hasher.Write(light.radius());
+        hasher.Write(light.type());
+        hasher.Write(light.desc().inner_cone_cos);
+        hasher.Write(light.desc().outer_cone_cos);
+        hasher.Write(light.desc().exponent);
+        hasher.Write(light.desc().cast_shadow);
+    }
+    return hasher.Finish();
 }
 
 auto LightUniformSource::Evaluate(const UniformUpdateContext*,
@@ -954,8 +1105,21 @@ auto ShadowUniformSource::Describe(UniformBindingSink* sink) const
     return BindGlobalProducer(sink, GlobalUniformProducer::Shadow);
 }
 
-auto ShadowUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
-    return context->Frame()->revision;
+auto ShadowUniformSource::Version(const UniformUpdateContext*) const -> u64 {
+    UniformStateHasher hasher;
+    const auto         camera_transform = m_camera->Transforms();
+    hasher.WriteBytes(camera_transform.eye.data(), sizeof(double) * 3);
+    hasher.WriteBytes(camera_transform.center.data(), sizeof(double) * 3);
+    hasher.Write(m_camera->FarClip());
+    auto* light_node = m_light->node();
+    const bool has_node = light_node != nullptr;
+    hasher.Write(has_node);
+    if (has_node) {
+        light_node->UpdateTrans();
+        hasher.WriteBytes(light_node->ModelTrans().data(), sizeof(double) * 16);
+    }
+    hasher.Write(m_light->desc().cascade_distances);
+    return hasher.Finish();
 }
 
 auto ShadowUniformSource::Evaluate(const UniformUpdateContext*,
@@ -1068,7 +1232,29 @@ auto TextureUniformSource::Describe(UniformBindingSink* sink) const
 }
 
 auto TextureUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
-    return context->Frame()->revision;
+    UniformStateHasher hasher;
+    auto               resources = context->Resources();
+    for (usize index {}; index < WE_GLTEX_NAMES.len(); ++index) {
+        auto texture = resources->Texture(index);
+        if (texture.is_none()) continue;
+        hasher.Write(index);
+        hasher.Write(texture->revision);
+        hasher.Write(texture->has_extent);
+        if (texture->has_extent) {
+            hasher.Write(texture->source_extent);
+            hasher.Write(texture->sample_extent);
+        }
+        hasher.Write(texture->has_mipmap);
+        if (texture->has_mipmap) {
+            hasher.Write(texture->mipmap_level);
+        }
+        hasher.Write(texture->has_transform);
+        if (texture->has_transform) {
+            hasher.Write(texture->rotation);
+            hasher.Write(texture->translation);
+        }
+    }
+    return hasher.Finish();
 }
 
 auto TextureUniformSource::Evaluate(const UniformUpdateContext* context,
@@ -1115,8 +1301,10 @@ auto ParticleTrailUniformSource::Describe(UniformBindingSink* sink) const
                 UniformValueShape::Float(u32(4)));
 }
 
-auto ParticleTrailUniformSource::Version(const UniformUpdateContext* context) const -> u64 {
-    return context->Frame()->revision;
+auto ParticleTrailUniformSource::Version(const UniformUpdateContext*) const -> u64 {
+    UniformStateHasher hasher;
+    hasher.Write(m_state->render_var);
+    return hasher.Finish();
 }
 
 auto ParticleTrailUniformSource::Evaluate(const UniformUpdateContext*,

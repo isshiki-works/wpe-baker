@@ -199,7 +199,7 @@ struct OfflineSession::Impl {
     void rebuildRenderGraph(vulkan::RenderGraphResourceRetention retention, bool evict_meshes);
     void consumeDirtyEventsCoveredByGraphRebuild();
     void refreshPreparedRenderTargetDirtyEvents();
-    void refreshPreparedMeshDirtyEvents();
+    void refreshPreparedMeshDirtyEvents(bool include_data = true);
     void refreshPreparedMaterialDirtyEvents();
 
     // 成员的声明顺序决定析构顺序：场景先于 VulkanRender、混音器与 Services 析构，
@@ -426,7 +426,7 @@ bool OfflineSession::Impl::draw(const FrameClock& clock, const FrameProfile& pro
         m_render->configureRenderTargets(*m_scene);
     }
     const auto rt_finished = m_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    refreshPreparedMeshDirtyEvents();
+    refreshPreparedMeshDirtyEvents(rasters());
     const auto meshes_finished = m_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     refreshPreparedMaterialDirtyEvents();
     const auto materials_finished = m_profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
@@ -510,9 +510,9 @@ void OfflineSession::Impl::refreshPreparedRenderTargetDirtyEvents() {
     m_render->refreshPreparedTextures(*m_scene, m_render_scene);
 }
 
-void OfflineSession::Impl::refreshPreparedMeshDirtyEvents() {
+void OfflineSession::Impl::refreshPreparedMeshDirtyEvents(bool include_data) {
     if (! m_scene || ! m_render->inited() || m_rg.is_none()) return;
-    auto events = m_scene->ConsumePreparedMeshDirtyEvents();
+    auto events = m_scene->ConsumePreparedMeshDirtyEvents(include_data);
     if (events.is_empty()) return;
 
     bool requires_graph_rebuild = events.iter().any([](auto event) {
