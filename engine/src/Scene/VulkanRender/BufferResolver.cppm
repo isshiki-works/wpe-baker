@@ -44,6 +44,11 @@ struct DrawBufferRefs {
 
     Vec<resource::BufferUseHandle>    vertices;
     Option<resource::BufferUseHandle> index;
+    rstd::array<VkBuffer, 8>          vk_vertex_buffers {};
+    rstd::array<VkDeviceSize, 8>      vk_vertex_offsets {};
+    usize                             vk_vertex_count {};
+    VkBuffer                          vk_index_buffer { VK_NULL_HANDLE };
+    VkDeviceSize                      vk_index_offset {};
 
     DrawBufferRefs()                                     = default;
     DrawBufferRefs(const DrawBufferRefs&)                = delete;

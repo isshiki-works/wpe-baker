@@ -1884,7 +1884,7 @@ bool VulkanRender::Impl::prepareProgram(Scene& scene, const RenderSceneSnapshot&
     }
 
     {
-        m_program.rebuildScopes();
+        m_program.rebuildScopesIfNeeded();
     }
     if (! commitPreparedUploads()) {
         m_program.abortPrepare(m_rendering_resources);

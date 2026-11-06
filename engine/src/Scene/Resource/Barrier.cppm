@@ -46,7 +46,53 @@ public:
     void Clear() { m_barriers.clear(); }
 
     void Record(vvk::CommandBuffer& command) const {
-        for (const auto& barrier : m_barriers) barrier.Record(command);
+        if (m_barriers.is_empty()) return;
+        if (m_barriers.len() == usize(1)) {
+            m_barriers[usize()].Record(command);
+            return;
+        }
+        constexpr usize                       kStackCap { 16 };
+        rstd::array<VkImageMemoryBarrier, 16> stack_barriers {};
+        rstd::vec::Vec<VkImageMemoryBarrier>         heap_barriers;
+        VkImageMemoryBarrier*                        out = stack_barriers.data();
+        if (m_barriers.len() > kStackCap) {
+            heap_barriers.resize(m_barriers.len(), VkImageMemoryBarrier {});
+            out = heap_barriers.data();
+        }
+        VkPipelineStageFlags src_stage  = m_barriers[usize()].src_stage;
+        VkPipelineStageFlags dst_stage  = m_barriers[usize()].dst_stage;
+        VkDependencyFlags    dependency = m_barriers[usize()].dependency;
+        usize                batch_len {};
+        for (usize i {}; i < m_barriers.len(); ++i) {
+            const auto& entry = m_barriers[i];
+            if (batch_len > usize() && entry.dependency != dependency) {
+                command.PipelineBarrier(
+                    src_stage,
+                    dst_stage,
+                    dependency,
+                    {},
+                    {},
+                    slice<VkImageMemoryBarrier>::from_raw_parts(out, batch_len));
+                src_stage  = entry.src_stage;
+                dst_stage  = entry.dst_stage;
+                dependency = entry.dependency;
+                batch_len  = usize();
+            } else {
+                src_stage |= entry.src_stage;
+                dst_stage |= entry.dst_stage;
+            }
+            out[batch_len.to_primitive()] = entry.barrier;
+            ++batch_len;
+        }
+        if (batch_len > usize()) {
+            command.PipelineBarrier(
+                src_stage,
+                dst_stage,
+                dependency,
+                {},
+                {},
+                slice<VkImageMemoryBarrier>::from_raw_parts(out, batch_len));
+        }
     }
 
     auto Size() const noexcept -> usize { return m_barriers.len(); }

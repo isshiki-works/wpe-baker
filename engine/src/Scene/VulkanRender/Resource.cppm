@@ -286,6 +286,68 @@ inline TextureRequest MakeDepthTextureRequest(std::string_view name, const Scene
     };
 }
 
+inline bool UpdateRenderTargetTextureRequest(Option<TextureRequest>&  target,
+                                             std::string_view         name,
+                                             const SceneRenderTarget& rt) {
+    auto content = TextureContentFlag(TextureContent::SourceDefined);
+    if (rt.force_clear || rt.clear_on_first_write)
+        content |= TextureContentFlag(TextureContent::ClearOnFirstWrite);
+    if (rt.initialize_transparent) {
+        content |= TextureContentFlag(TextureContent::InitializeTransparent);
+    }
+    auto definition = RenderTargetTextureDefinition(rt);
+    auto lifetime =
+        rt.allowReuse ? TextureLifetimeClass::FrameLocal : TextureLifetimeClass::Retained;
+    auto logical_extent = rt.effect_scale_applied
+        ? Some(rstd::array<float, 2> { rstd::as_cast<float>(rt.width),
+                                       rstd::as_cast<float>(rt.height) })
+        : None<rstd::array<float, 2>>();
+    const auto name_str = rstd::cppstd::as_str(name).unwrap();
+    if (target.is_some()) {
+        const auto& current = *target;
+        if (current.kind == TextureRequestKind::RenderTarget && current.name == name_str &&
+            current.source.is_none() && current.definition.is_some() &&
+            *current.definition == definition && current.lifetime == lifetime &&
+            current.content == content && current.logical_shader_extent == logical_extent) {
+            return false;
+        }
+    }
+    target = Some(TextureRequest {
+        .kind                  = TextureRequestKind::RenderTarget,
+        .name                  = rstd::string::String::make(name_str),
+        .definition            = rstd::Some(definition),
+        .lifetime              = lifetime,
+        .content               = content,
+        .logical_shader_extent = logical_extent,
+    });
+    return true;
+}
+
+inline bool UpdateDepthTextureRequest(Option<TextureRequest>&  target,
+                                      std::string_view         output_name,
+                                      const SceneRenderTarget& rt) {
+    auto definition = DepthTextureDefinition(rt);
+    auto lifetime =
+        rt.allowReuse ? TextureLifetimeClass::FrameLocal : TextureLifetimeClass::Retained;
+    const auto content = TextureContentFlag(TextureContent::SourceDefined);
+    if (target.is_some()) {
+        const auto& current      = *target;
+        const auto  current_name = rstd::cppstd::as_string_view(current.name.as_str());
+        if (current.kind == TextureRequestKind::DepthAttachment &&
+            current_name.size() == output_name.size() + 7 &&
+            current_name.starts_with(output_name) && current_name.ends_with("::depth") &&
+            current.source.is_none() && current.definition.is_some() &&
+            *current.definition == definition && current.lifetime == lifetime &&
+            current.content == content && current.logical_shader_extent.is_none()) {
+            return false;
+        }
+    }
+    std::string depth_name(output_name);
+    depth_name += "::depth";
+    target = Some(MakeDepthTextureRequest(depth_name, rt));
+    return true;
+}
+
 // 按纹理定义 id 在渲染快照里解析导入纹理请求。
 inline auto ResolveSnapshotTexture(const RenderSceneSnapshot&    render_scene,
                                    resource::TextureDefinitionId id) -> Option<TextureRequest> {

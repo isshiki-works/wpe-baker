@@ -17,6 +17,15 @@ using namespace rstd::literals;
 namespace owe::vulkan
 {
 
+namespace
+{
+// 全局递增：缓冲重建后新对象的序号也不会与旧值撞上。
+u64 NextUniformUploadSerial() {
+    static rstd::uint64_t serial = 0;
+    return u64(++serial);
+}
+} // namespace
+
 auto ProgramUniformFrameContext::TextureFrame(SceneDrawItemId draw, usize texture_index) const
     -> Option<SceneTextureFrameView> {
     return m_textures->TextureFrame(draw, texture_index);
@@ -304,9 +313,7 @@ namespace
 bool WriteFloat(mut_ref<u8[]> destination, usize offset, float value) {
     if (offset > destination.len() || usize(sizeof(float)) > destination.len() - offset)
         return false;
-    auto bytes =
-        slice<u8>::from_raw_parts(reinterpret_cast<const byte*>(&value), usize(sizeof(float)));
-    for (usize index {}; index < bytes.len(); ++index) destination[offset + index] = bytes[index];
+    std::memcpy(destination.as_raw_ptr() + offset.to_primitive(), &value, sizeof(float));
     return true;
 }
 
@@ -490,7 +497,10 @@ auto SerializeUniformValue(mut_ref<u8[]> destination, const UniformSlot& slot,
                 rstd::format("uniform {} value kind does not match reflection", slot.name.as_str()),
         });
     }
-    for (usize index {}; index < slot.size; ++index) destination[slot.offset + index] = u8();
+    if (slot.size > usize()) {
+        std::memset(
+            destination.as_raw_ptr() + slot.offset.to_primitive(), 0, slot.size.to_primitive());
+    }
     if (value_matrix) {
         return SerializeMatrixValue(destination, slot, value, convention, matrix_abi);
     }
@@ -620,7 +630,8 @@ auto UniformBufferBinding::Update(const UniformBufferFrameContext*         frame
     m_versions.clear();
     bool changed  = force;
     for (auto& bound : m_sources) {
-        u64 version = bound.source->Version(context);
+        detail::SourceValueWriter writer_impl(*this, bound);
+        u64 version = bound.source->VersionFor(context, &writer_impl);
         m_versions.push(rstd::move(version));
         changed = changed || ! bound.evaluated || bound.version != version;
     }
@@ -676,6 +687,7 @@ auto UniformBufferBinding::Update(const UniformBufferFrameContext*         frame
             auto error = rstd::move(updated).unwrap_err_unchecked();
             return Err(UniformBufferUpdateError { .message = rstd::move(error.message) });
         }
+        m_upload_serial = NextUniformUploadSerial();
         if (m_uploaded_data.len() != m_data.len()) {
             m_uploaded_data.resize(m_data.len(), u8(0));
         }
@@ -727,13 +739,16 @@ auto SharedUniformBufferBinding::Update(const UniformBufferFrameContext*        
     m_versions.clear();
     bool changed  = ! m_uploaded;
     for (auto& bound : m_sources) {
-        auto version = bound.source->Version(context);
+        detail::SourceValueWriter writer_impl(*this, bound);
+        auto version = bound.source->VersionFor(context, &writer_impl);
         m_versions.push(rstd::move(version));
         changed = changed || ! bound.evaluated || bound.version != version;
     }
     if (! changed) return Ok(empty {});
 
-    for (usize index {}; index < m_data.len(); ++index) m_data[index] = u8();
+    if (! m_data.is_empty()) {
+        std::memset(m_data.data(), 0, m_data.len().to_primitive());
+    }
     usize source_index {};
     for (auto& bound : m_sources) {
         detail::SourceValueWriter writer_impl(*this, bound);
@@ -756,6 +771,7 @@ auto SharedUniformBufferBinding::Update(const UniformBufferFrameContext*        
                 .message = rstd::move(updated).unwrap_err_unchecked().message,
             });
         }
+        m_upload_serial = NextUniformUploadSerial();
         if (m_uploaded_data.len() != m_data.len()) {
             m_uploaded_data.resize(m_data.len(), u8(0));
         }

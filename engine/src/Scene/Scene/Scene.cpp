@@ -2118,6 +2118,7 @@ void SceneTextureAnimationRegistry::Advance(f64 delta) {
 
 auto SceneTextureAnimationRegistry::Frame(SceneDrawItemId draw, usize texture_index) const
     -> Option<SceneTextureFrameView> {
+    if (m_entries.is_empty()) return None();
     auto entry = m_entries.get(Key(draw));
     if (entry.is_none() || (**entry).node == nullptr) return None();
     auto binding = (**entry).bindings.get(texture_index);

@@ -162,9 +162,29 @@ public:
             return Ok(ResourcePrepareProgress::BatchReady);
         }
 
-        const auto& plan     = session.Plan();
-        const auto  sections = session.Sections();
-        auto        next     = rstd::move(session).TakeTable();
+        const auto& plan                 = session.Plan();
+        const auto  sections             = session.Sections();
+        const bool  incremental_textures = session.IncrementalTextures();
+        auto        next                 = rstd::move(session).TakeTable();
+        if (incremental_textures) {
+            bool same_resource_handles = true;
+            auto rollback = m_prepared.ApplyIncrementalTexturesForRollback(
+                rstd::move(next), same_resource_handles);
+            m_prepare_rollback = Some(PrepareRollback {
+                .sections              = sections,
+                .table                 = rstd::move(rollback),
+                .incremental_textures  = true,
+                .same_resource_handles = same_resource_handles,
+            });
+            if (! m_registries.States().Compile(plan, m_prepared)) {
+                AbortPreparePlan();
+                return Err(resource::ResourceError {
+                    .kind    = resource::ResourceErrorKind::BackendFailure,
+                    .message = rstd::format("compile resource state plan failed"),
+                });
+            }
+            return Ok(ResourcePrepareProgress::Complete);
+        }
         if (resource::ResourcePlanIncludes(sections, resource::ResourcePlanTextures) &&
             ! m_registries.States().Compile(plan, next)) {
             AbortPreparePlan();
@@ -222,14 +242,23 @@ public:
         for (usize i = rollback->removed_externals.len(); i > usize(); --i) {
             m_prepared.Insert(rstd::move(rollback->removed_externals[i - usize(1)]));
         }
-        m_prepared.RestoreSectionsFromRollback(rstd::move(rollback->table), rollback->sections);
+        if (rollback->incremental_textures) {
+            m_prepared.RestoreIncrementalTexturesFromRollback(rstd::move(rollback->table));
+        } else {
+            m_prepared.RestoreSectionsFromRollback(rstd::move(rollback->table), rollback->sections);
+        }
     }
 
     void CommitPreparePlan() {
+        const bool skip_retain = m_prepare_rollback.is_some() &&
+                                 m_prepare_rollback->incremental_textures &&
+                                 m_prepare_rollback->same_resource_handles;
         m_prepare_rollback = None();
         m_registries.TextureEntries().CommitPrepareTransaction();
-        auto active = m_prepared.TextureResources();
-        m_registries.TextureEntries().RetainActive(active.as_slice());
+        if (! skip_retain) {
+            auto active = m_prepared.TextureResources();
+            m_registries.TextureEntries().RetainActive(active.as_slice());
+        }
     }
 
     auto Prepared() const -> const PreparedResourceTable& { return m_prepared; }
@@ -654,6 +683,8 @@ private:
     struct PrepareRollback {
         resource::ResourcePlanSections             sections {};
         PreparedResourceTable                      table;
+        bool                                       incremental_textures { false };
+        bool                                       same_resource_handles { false };
         Vec<PreparedPipeline>                      removed_pipelines;
         Vec<PreparedRenderPass>                    removed_render_passes;
         Vec<PreparedFramebuffer>                   removed_framebuffers;

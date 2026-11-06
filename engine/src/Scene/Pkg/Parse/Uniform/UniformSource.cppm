@@ -179,10 +179,13 @@ public:
 
     auto Resolve(const SceneNode& node) const -> Option<mut_ref<SceneCamera>>;
     auto Active() const -> mut_ref<SceneCamera> { return m_active_camera.deref_mut(); }
+    u64  Epoch() const noexcept { return m_epoch; }
 
 private:
     HashMap<String, Arc<SceneCamera>> m_cameras;
     Arc<SceneCamera>                  m_active_camera;
+    Option<Arc<SceneCamera>>          m_global_perspective;
+    u64                               m_epoch { 1 };
 };
 
 struct UniformNodeState {
@@ -197,9 +200,19 @@ struct UniformNodeState {
     bool                          vertices_in_world_space { false };
     Option<Arc<SceneNode>>        effect_projection_node;
     array<float, 2>               effect_projection_size { 0.0f, 0.0f };
+    mutable const UniformNodeState* cached_base_parallax { nullptr };
+    mutable const UniformNodeState* cached_parent_parallax { nullptr };
+    mutable u64                     cached_parallax_epoch {};
+    mutable u64                     cached_parallax_tree_epoch {};
+    mutable SceneCamera*            cached_camera { nullptr };
+    mutable u64                     cached_camera_epoch {};
+    mutable u64                     cached_camera_tree_epoch {};
+    mutable bool                    cached_camera_valid { false };
 
     UniformNodeState(Arc<SceneNode> value, Arc<UniformCameraResolver> resolver)
         : node(rstd::move(value)), camera_resolver(rstd::move(resolver)) {}
+
+    auto ResolveCamera() const -> Option<mut_ref<SceneCamera>>;
 };
 
 struct UniformFrameInputs {
@@ -265,6 +278,7 @@ private:
     HashMap<const SceneNode*, i32>                   m_parallax_owners;
     HashMap<const SceneNode*, array<float, 2>>       m_node_parallax_depths;
 
+    void EnsureParallaxLinks(const UniformNodeState&, u64) const;
     auto LogicalParallaxState(const UniformNodeState&) const -> const UniformNodeState*;
     auto ParentParallaxState(const UniformNodeState&) const -> const UniformNodeState*;
 
@@ -275,6 +289,7 @@ private:
     array<float, 2>          m_ortho { 1920.0f, 1080.0f };
     array<float, 2>          m_pointer_input { 0.5f, 0.5f };
     Arc<AudioResponseDemand> m_audio_demand;
+    u64                      m_parallax_epoch { 1 };
 };
 
 class UniformRuntimeInput {
@@ -329,6 +344,7 @@ public:
 
     auto Describe(UniformBindingSink*) const -> Result<empty, UniformError> override;
     auto Version(const UniformUpdateContext*) const -> u64 override;
+    auto VersionFor(const UniformUpdateContext*, const UniformValueSink*) const -> u64 override;
     auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
         -> Result<empty, UniformError> override;
     auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> override { return None(); }
@@ -377,6 +393,8 @@ public:
 
 private:
     Vec<ref<SceneLight>> m_lights;
+    mutable u64          m_cached_frame_revision { 0 };
+    mutable u64          m_cached_version { 0 };
 };
 
 class ShadowUniformSource final : public UniformSource {
@@ -393,12 +411,15 @@ public:
 private:
     Arc<SceneCamera> m_camera;
     ref<SceneLight>  m_light;
+    mutable u64      m_cached_frame_revision { 0 };
+    mutable u64      m_cached_version { 0 };
 };
 
 class TextureUniformSource final : public UniformSource {
 public:
     auto Describe(UniformBindingSink*) const -> Result<empty, UniformError> override;
     auto Version(const UniformUpdateContext*) const -> u64 override;
+    auto VersionFor(const UniformUpdateContext*, const UniformValueSink*) const -> u64 override;
     auto Evaluate(const UniformUpdateContext*, UniformValueSink*) const
         -> Result<empty, UniformError> override;
     auto AcquireBindingLease() const -> Option<std::unique_ptr<UniformBindingLease>> override { return None(); }

@@ -67,6 +67,7 @@ public:
         std::vector<rstd::int32_t>              vk_tex_binding;
         std::vector<u32>                        vk_tex_set;
         std::vector<std::ptrdiff_t>             descriptor_image_slots;
+        bool                                    has_animated_textures { false };
         resource_registry::PreparedBarrierBatch sampled_barriers;
         VkExtent2D                              output_extent {};
         VkSampleCountFlagBits                   samples { VK_SAMPLE_COUNT_1_BIT };
@@ -98,6 +99,11 @@ public:
         u64                              render_pass_cache_observed_count { 0 };
         bool                             framebuffer_cache_hit { false };
         u64                              framebuffer_cache_observed_count { 0 };
+        VkRenderPass                     vk_render_pass { VK_NULL_HANDLE };
+        VkFramebuffer                    vk_framebuffer { VK_NULL_HANDLE };
+        Option<Arc<PipelineResourceEntry>> prepared_pipeline;
+        // 每次 prepare / 纹理刷新成功取一个全局递增序号，供阴影图复用判断管线与缓冲是否换过。
+        u64                              prepare_serial { 0 };
 
         // M2 遮罩支撑区限定（SceneToRenderGraph 填 in，prepare 填 prepared）。
         // m2_support 非空 = 候选：输出版本应与 m2_alias_use（V_{i-2}）同物理纹理，
@@ -128,6 +134,7 @@ public:
         -> Result<Vec<std::unique_ptr<UniformBufferUpdate>>, UniformBufferUpdateError> override;
     bool prepareResourceStates(
         resource_registry::TextureStatePreparer*) override;
+    auto shadowAtlasSignature(slice<const UniformBufferUpdate*>) const -> Option<u64> override;
     Option<RenderItemId>                      renderItemId() const override;
     Option<PipelineCacheKey>                  pipelineCacheKey() const override;
     bool                                      pipelineCacheHit() const override;
@@ -144,6 +151,8 @@ public:
     bool setTextureBinding(u32 index, TextureBindingRequest binding) override;
 
     void prepare(Scene&, const Device&, PassPrepareContext&) override;
+    bool refreshPreparedTextures(Scene&, const Device&, PassPrepareContext&,
+                                 PassInvalidationFlags) override;
     bool update(PassUpdateContext&) override;
     void completeUpdate() override;
     void record(PassRecordContext&) override;

@@ -316,6 +316,11 @@ struct UniformSource {
 
     virtual auto Describe(UniformBindingSink* sink) const -> Result<empty, UniformError> = 0;
     virtual auto Version(const UniformUpdateContext* context) const -> u64              = 0;
+    virtual auto VersionFor(const UniformUpdateContext* context,
+                            const UniformValueSink*     sink) const -> u64 {
+        (void)sink;
+        return Version(context);
+    }
     virtual auto Evaluate(const UniformUpdateContext* context, UniformValueSink* sink) const
         -> Result<empty, UniformError>                                                  = 0;
     virtual auto AcquireBindingLease() const

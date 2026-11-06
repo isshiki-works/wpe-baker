@@ -358,6 +358,57 @@ public:
         }
     }
 
+    auto ApplyIncrementalTexturesForRollback(PreparedResourceTable&& updates,
+                                             bool&                   same_resource_handles)
+        -> PreparedResourceTable {
+        PreparedResourceTable rollback(m_generation, updates.m_textures.len());
+        m_generation          = updates.m_generation;
+        same_resource_handles = true;
+        auto values           = updates.m_textures.values();
+        for (auto value = values.next(); value.is_some(); value = values.next()) {
+            const auto& next_tex = **value;
+            auto        previous = m_textures.insert(
+                next_tex.use,
+                PreparedTexture {
+                    .use                 = next_tex.use,
+                    .resource            = next_tex.resource,
+                    .request             = next_tex.request.clone(),
+                    .physical            = next_tex.physical.clone(),
+                    .image               = next_tex.image,
+                    .physical_generation = next_tex.physical_generation,
+                    .ready               = next_tex.ready,
+                });
+            if (previous.is_some()) {
+                if (previous->resource != next_tex.resource) {
+                    same_resource_handles = false;
+                }
+                (void)rollback.Insert(rstd::move(*previous));
+            } else {
+                same_resource_handles = false;
+            }
+        }
+        return rollback;
+    }
+
+    void RestoreIncrementalTexturesFromRollback(PreparedResourceTable&& rollback) {
+        m_generation = rollback.m_generation;
+        auto values  = rollback.m_textures.values();
+        for (auto value = values.next(); value.is_some(); value = values.next()) {
+            const auto& prev_tex = **value;
+            (void)m_textures.insert(
+                prev_tex.use,
+                PreparedTexture {
+                    .use                 = prev_tex.use,
+                    .resource            = prev_tex.resource,
+                    .request             = prev_tex.request.clone(),
+                    .physical            = prev_tex.physical.clone(),
+                    .image               = prev_tex.image,
+                    .physical_generation = prev_tex.physical_generation,
+                    .ready               = prev_tex.ready,
+                });
+        }
+    }
+
     auto clone() const -> PreparedResourceTable {
         PreparedResourceTable cloned(m_generation);
 
@@ -513,6 +564,7 @@ public:
 
     auto Plan() const noexcept -> const resource::ResourcePlan& { return *m_plan; }
     auto Sections() const noexcept -> resource::ResourcePlanSections { return m_sections; }
+    bool IncrementalTextures() const noexcept { return m_incremental_textures; }
     auto TakeTable() && -> PreparedResourceTable { return rstd::move(m_table); }
 
 private:
@@ -536,11 +588,16 @@ private:
     };
 
     ResourcePrepareSession(const resource::ResourcePlan&  plan,
-                           resource::ResourcePlanSections sections)
-        : m_plan(rstd::addressof(plan)), m_sections(sections), m_table(plan.generation, plan.textures.len()) {}
+                           resource::ResourcePlanSections sections,
+                           bool                           incremental_textures = false)
+        : m_plan(rstd::addressof(plan)),
+          m_sections(sections),
+          m_incremental_textures(incremental_textures),
+          m_table(plan.generation, incremental_textures ? usize() : plan.textures.len()) {}
 
     const resource::ResourcePlan*                         m_plan;
     resource::ResourcePlanSections                        m_sections;
+    bool                                                  m_incremental_textures { false };
     PreparedResourceTable                                 m_table;
     Vec<PendingContent>                                   m_pending { Vec<PendingContent>::make() };
     usize                                                 m_next_submit {};
@@ -587,7 +644,11 @@ public:
                resource::ResourcePlanSections sections       = resource::ResourcePlanAll,
                const PreparedResourceTable*   previous_table = nullptr)
         -> Result<ResourcePrepareSession, resource::ResourceError> {
-        ResourcePrepareSession   session(plan, sections);
+        const bool incremental_textures =
+            previous_table != nullptr && sections == resource::ResourcePlanTextures &&
+            previous_table->Generation() == plan.generation &&
+            previous_table->TextureCount() == plan.textures.len();
+        ResourcePrepareSession   session(plan, sections, incremental_textures);
         auto                     texture_provider = rstd::move(providers.texture);
         ResourceContentProviders remaining {
             .buffer = rstd::move(providers.buffer),
@@ -680,6 +741,7 @@ public:
         auto pending_index =
             rstd::collections::HashMap<resource::ImportedTextureContentIdentity, usize>::make();
         auto deferred_fast_entries = Vec<usize>::make();
+        auto slow_path_handles     = Vec<resource::TextureHandle>::make();
         if (previous_table != nullptr) {
             deferred_fast_entries.reserve(entries.len());
         }
@@ -723,6 +785,16 @@ public:
                     .message =
                         rstd::format("invalid texture request {}", entry.request.name.as_str()),
                 });
+            }
+            if (previous_table != nullptr) {
+                bool tracked = false;
+                for (usize k {}; k < slow_path_handles.len(); ++k) {
+                    if (slow_path_handles[k] == handle) {
+                        tracked = true;
+                        break;
+                    }
+                }
+                if (! tracked) slow_path_handles.emplace_back(handle);
             }
 
             auto physical = m_textures.ResolveCurrent(handle);
@@ -794,15 +866,23 @@ public:
                 .request  = entry.request.clone(),
             });
         }
-        for (usize fast_idx {}; fast_idx < deferred_fast_entries.len(); ++fast_idx) {
-            const auto& entry = entries[deferred_fast_entries[fast_idx]];
-            auto        prev  = previous_table->Resolve(entry.handle);
-            if (prev.is_none()) continue;
-            const auto& prev_tex = **prev;
-            auto        physical = m_textures.ResolveCurrent(prev_tex.resource);
-            if (physical.is_none()) physical = m_textures.ResolvePending(prev_tex.resource);
-            if (physical.is_some()) {
-                if ((**physical).generation == prev_tex.physical_generation) {
+        if (! session.m_incremental_textures || ! slow_path_handles.is_empty()) {
+            for (usize fast_idx {}; fast_idx < deferred_fast_entries.len(); ++fast_idx) {
+                const auto& entry = entries[deferred_fast_entries[fast_idx]];
+                auto        prev  = previous_table->Resolve(entry.handle);
+                if (prev.is_none()) continue;
+                const auto& prev_tex = **prev;
+                bool        shared_with_slow_path = false;
+                for (usize k {}; k < slow_path_handles.len(); ++k) {
+                    if (slow_path_handles[k] == prev_tex.resource) {
+                        shared_with_slow_path = true;
+                        break;
+                    }
+                }
+                if (session.m_incremental_textures && ! shared_with_slow_path) {
+                    continue;
+                }
+                if (! shared_with_slow_path) {
                     if (! session.m_table.Insert(PreparedTexture {
                             .use                 = entry.handle,
                             .resource            = prev_tex.resource,
@@ -817,13 +897,35 @@ public:
                             .message = rstd::format("duplicate texture use {}", entry.handle.index),
                         });
                     }
-                } else {
-                    auto inserted = InsertPrepared(entry.handle,
-                                                   prev_tex.resource,
-                                                   entry.request.clone(),
-                                                   **physical,
-                                                   session.m_table);
-                    if (inserted.is_err()) return inserted;
+                    continue;
+                }
+                auto physical = m_textures.ResolveCurrent(prev_tex.resource);
+                if (physical.is_none()) physical = m_textures.ResolvePending(prev_tex.resource);
+                if (physical.is_some()) {
+                    if ((**physical).generation == prev_tex.physical_generation) {
+                        if (! session.m_incremental_textures &&
+                            ! session.m_table.Insert(PreparedTexture {
+                                .use                 = entry.handle,
+                                .resource            = prev_tex.resource,
+                                .request             = prev_tex.request.clone(),
+                                .physical            = prev_tex.physical.clone(),
+                                .image               = prev_tex.image,
+                                .physical_generation = prev_tex.physical_generation,
+                                .ready               = prev_tex.ready,
+                            })) {
+                            return Err(resource::ResourceError {
+                                .kind    = resource::ResourceErrorKind::BackendFailure,
+                                .message = rstd::format("duplicate texture use {}", entry.handle.index),
+                            });
+                        }
+                    } else {
+                        auto inserted = InsertPrepared(entry.handle,
+                                                       prev_tex.resource,
+                                                       entry.request.clone(),
+                                                       **physical,
+                                                       session.m_table);
+                        if (inserted.is_err()) return inserted;
+                    }
                 }
             }
         }

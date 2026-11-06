@@ -128,6 +128,7 @@ struct RenderProgram {
         PassInvalidationFlags           invalidation_flags { PassInvalidationNone };
         bool                            uniforms_need_prepare { true };
         bool                            active_in_frame { true };
+        mutable VulkanPass*             cached_pass { nullptr };
 
         bool invalidated() const { return invalidation_flags != PassInvalidationNone; }
 
@@ -191,15 +192,20 @@ struct RenderProgram {
     Option<resource::DescriptorBindingHandle>               global_descriptor_binding;
     rstd::Option<resource_registry::ResourcePrepareSession> resource_prepare_session;
     bool                                                    texture_only_prepare { false };
+    bool                                                    scopes_dirty { true };
     bool                                                    loaded { false };
+    // 上一帧画阴影图时全部写入 pass 的输入指纹；None = 上一帧没画或无法判定。
+    Option<u64>                                             last_shadow_signature;
 
     void clear() {
+        last_shadow_signature = None();
         uniform_updates.clear();
         uniform_update_owners.clear();
         resource_prepare_session = rstd::None();
         pipeline_layout_assignments.entries.clear();
         global_descriptor_binding = None();
         scopes.clear();
+        scopes_dirty = true;
         pass_records.clear();
         resource_plan       = {};
         graph_texture_count = rstd::usize();
@@ -211,17 +217,25 @@ struct RenderProgram {
     }
 
     auto resolve(const PreparedPassRecord& record) -> rstd::Option<VulkanPass&> {
+        if (record.cached_pass != nullptr) {
+            return rstd::Some<VulkanPass&>(*record.cached_pass);
+        }
         if (record.pass.kind == PreparedPassKind::Frame) {
             if (record.pass.frame_index >= frame_passes.len()) return rstd::None();
-            return rstd::Some<VulkanPass&>(*frame_passes[record.pass.frame_index]);
+            record.cached_pass = rstd::addressof(*frame_passes[record.pass.frame_index]);
+            return rstd::Some<VulkanPass&>(*record.cached_pass);
         }
         if (graph.is_none()) return rstd::None();
         auto resolved = (*graph)->getPass(record.pass.graph);
         if (resolved.is_none()) return rstd::None();
-        return rstd::Some<VulkanPass&>(static_cast<VulkanPass&>(*resolved));
+        record.cached_pass = rstd::addressof(static_cast<VulkanPass&>(*resolved));
+        return rstd::Some<VulkanPass&>(*record.cached_pass);
     }
 
     auto resolve(const PreparedPassRecord& record) const -> rstd::Option<const VulkanPass&> {
+        if (record.cached_pass != nullptr) {
+            return rstd::Some<const VulkanPass&>(*record.cached_pass);
+        }
         if (record.pass.kind == PreparedPassKind::Frame) {
             if (record.pass.frame_index >= frame_passes.len()) return rstd::None();
             return rstd::Some<const VulkanPass&>(*frame_passes[record.pass.frame_index]);
@@ -329,6 +343,7 @@ struct RenderProgram {
         if (capture_after.is_none()) combined.push(rstd::move(final_record));
         if (capture_after.is_some() && ! captured) return false;
         pass_records = rstd::move(combined);
+        scopes_dirty = true;
         return true;
     }
 
@@ -791,12 +806,42 @@ struct RenderProgram {
                 const bool needs_prepare = record.needsPrepare(*pass);
                 if (needs_prepare) record.uniforms_need_prepare = true;
                 if (record.invalidated()) {
-                    rr.resources.RemovePreparedGraphics(record.resources.pipelines.as_slice(),
-                                                        record.resources.render_passes.as_slice(),
-                                                        record.resources.framebuffers.as_slice(),
-                                                        record.resources.descriptors.as_slice(),
-                                                        record.resources.externals.as_slice());
+                    const PassInvalidationFlags allowed_fast_flags =
+                        ToPassInvalidationFlags(PassInvalidation::Resources) |
+                        ToPassInvalidationFlags(PassInvalidation::Framebuffer);
+                    if (texture_only_prepare && pass->prepared() &&
+                        (record.invalidation_flags & ~allowed_fast_flags) == PassInvalidationNone) {
+                        const bool fb_invalidated =
+                            (record.invalidation_flags &
+                             ToPassInvalidationFlags(PassInvalidation::Framebuffer)) !=
+                            PassInvalidationNone;
+                        if (fb_invalidated) {
+                            scopes_dirty = true;
+                            rr.resources.RemovePreparedGraphics(
+                                {}, {}, record.resources.framebuffers.as_slice(), {}, {});
+                        }
+                        if (pass->refreshPreparedTextures(
+                                scene, device, prepare_context, record.invalidation_flags)) {
+                            record.clearInvalidation();
+                            continue;
+                        }
+                        rr.resources.RemovePreparedGraphics(
+                            record.resources.pipelines.as_slice(),
+                            record.resources.render_passes.as_slice(),
+                            fb_invalidated ? slice<resource::FramebufferUseHandle> {}
+                                           : record.resources.framebuffers.as_slice(),
+                            record.resources.descriptors.as_slice(),
+                            record.resources.externals.as_slice());
+                    } else {
+                        rr.resources.RemovePreparedGraphics(
+                            record.resources.pipelines.as_slice(),
+                            record.resources.render_passes.as_slice(),
+                            record.resources.framebuffers.as_slice(),
+                            record.resources.descriptors.as_slice(),
+                            record.resources.externals.as_slice());
+                    }
                 }
+                if (needs_prepare) scopes_dirty = true;
                 record.prepareIfNeeded(*pass, scene, device, prepare_context);
                 if (!pass->prepared()) {
                     rstd_error("prepare pass failed for {}", record.pass_name);
@@ -1112,8 +1157,13 @@ struct RenderProgram {
         return UploadCommitResult {};
     }
 
+    void rebuildScopesIfNeeded() {
+        if (scopes_dirty || scopes.is_empty()) rebuildScopes();
+    }
+
     void rebuildScopes() {
         scopes.clear();
+        scopes_dirty              = false;
         auto pending_scope_passes = rstd::vec::Vec<rstd::usize>::make();
 
         auto flushScopePasses = [&]() {
@@ -1154,15 +1204,15 @@ struct RenderProgram {
     }
 
     template<typename Callback>
-    void withRecordContext(rstd::usize index, RenderingResources& rr, Callback&& callback) {
+    void withRecordContext(
+        rstd::usize index, RenderingResources& rr,
+        Option<ref<resource_registry::PreparedDescriptorBinding>> global_descriptor,
+        Callback&& callback) {
         if (index >= pass_records.len()) return;
         auto pass = resolve(pass_records[index]);
         if (pass.is_none()) return;
 
         PreparedPassResources resources(rr.resources.Prepared(), pass_records[index].resources);
-        auto global_descriptor = global_descriptor_binding.is_some()
-                                     ? rr.resources.Prepared().Resolve(*global_descriptor_binding)
-                                     : None<ref<resource_registry::PreparedDescriptorBinding>>();
         PassRecordContext context {
             .command =
                 rstd::mut_ref<vvk::CommandBuffer>::from_raw_parts(rstd::addressof(rr.command)),
@@ -1244,16 +1294,65 @@ struct RenderProgram {
         };
         if (timing) timing->mark(rr.command, PassTimestampWriter::uploads);
 
+        auto global_descriptor = global_descriptor_binding.is_some()
+                                     ? rr.resources.Prepared().Resolve(*global_descriptor_binding)
+                                     : None<ref<resource_registry::PreparedDescriptorBinding>>();
+
+        // 阴影图复用：全部写入 pass 的输入（uniform 字节、管线与缓冲、可见性、纹理帧、帧缓冲）
+        // 都与上一帧相同时，常驻的阴影图里已是本帧应得的内容。这些 pass 只记采样屏障，
+        // 不开渲染通道（首个 pass 的 CLEAR 一并跳过；通道收尾布局与上一帧相同）。
+        // 要么全部跳过，要么全部重画，避免只重画一部分叠在旧内容上。
+        auto shadow_writers = Vec<rstd::usize>::make();
+        bool shadow_known   = true;
+        rstd::uint64_t shadow_state = 1469598103934665603ULL;
+        for (rstd::usize index {}; index < pass_records.len(); ++index) {
+            if (! pass_records[index].active_in_frame) continue;
+            auto pass = resolve(pass_records[index]);
+            if (! pass || ! pass->prepared()) continue;
+            auto signature = pass->shadowAtlasSignature(uniform_updates.as_slice());
+            if (signature.is_none()) continue;
+            shadow_writers.push(rstd::usize(index));
+            if (*signature == u64()) shadow_known = false;
+            shadow_state ^= signature->to_primitive();
+            shadow_state *= 1099511628211ULL;
+        }
+        const auto shadow_signature = ! shadow_writers.is_empty() && shadow_known
+                                          ? Some(u64(shadow_state))
+                                          : None<u64>();
+        const bool reuse_shadow = shadow_signature.is_some() && last_shadow_signature.is_some() &&
+                                  *shadow_signature == *last_shadow_signature;
+        last_shadow_signature   = shadow_signature;
+        auto reused = [&](rstd::usize index) {
+            if (! reuse_shadow) return false;
+            for (auto writer : shadow_writers) {
+                if (writer == index) return true;
+            }
+            return false;
+        };
+        auto skipReused = [&](rstd::usize index) {
+            withRecordContext(index,
+                              rr,
+                              global_descriptor,
+                              [](VulkanPass& target, PassRecordContext& context) {
+                                  target.prepareRenderScopeDraw(context);
+                              });
+            mark(index);
+        };
+
         for (auto& scope : scopes) {
             draw_record_state.Reset();
             if (scope.single) {
                 auto index = *scope.single;
                 auto pass  = resolve(pass_records[index]);
-                if (pass && pass->prepared()) {
-                    withRecordContext(
-                        index, rr, [](VulkanPass& target, PassRecordContext& context) {
-                            target.record(context);
-                        });
+                if (pass && pass->prepared() && reused(index)) {
+                    skipReused(index);
+                } else if (pass && pass->prepared()) {
+                    withRecordContext(index,
+                                      rr,
+                                      global_descriptor,
+                                      [](VulkanPass& target, PassRecordContext& context) {
+                                          target.record(context);
+                                      });
                     mark(index);
                 }
                 continue;
@@ -1263,9 +1362,12 @@ struct RenderProgram {
             if (scoped_passes.is_empty()) continue;
             if (scoped_passes.len() == rstd::usize(1)) {
                 auto pass = resolve(pass_records[scoped_passes[rstd::usize()]]);
-                if (pass && pass->prepared()) {
+                if (pass && pass->prepared() && reused(scoped_passes[rstd::usize()])) {
+                    skipReused(scoped_passes[rstd::usize()]);
+                } else if (pass && pass->prepared()) {
                     withRecordContext(scoped_passes[rstd::usize()],
                                       rr,
+                                      global_descriptor,
                                       [](VulkanPass& target, PassRecordContext& context) {
                                           target.record(context);
                                       });
@@ -1280,25 +1382,37 @@ struct RenderProgram {
                 })) {
                 continue;
             }
+            if (std::all_of(scoped_passes.begin(), scoped_passes.end(), reused)) {
+                for (auto index : scoped_passes) skipReused(index);
+                continue;
+            }
 
             for (auto index : scoped_passes) {
-                withRecordContext(index, rr, [](VulkanPass& target, PassRecordContext& context) {
-                    target.prepareRenderScopeDraw(context);
-                });
+                withRecordContext(index,
+                                  rr,
+                                  global_descriptor,
+                                  [](VulkanPass& target, PassRecordContext& context) {
+                                      target.prepareRenderScopeDraw(context);
+                                  });
             }
             withRecordContext(scoped_passes[rstd::usize()],
                               rr,
+                              global_descriptor,
                               [](VulkanPass& target, PassRecordContext& context) {
                                   target.beginRenderScope(context);
                               });
             for (auto index : scoped_passes) {
-                withRecordContext(index, rr, [](VulkanPass& target, PassRecordContext& context) {
-                    target.recordRenderScopeDraw(context);
-                });
+                withRecordContext(index,
+                                  rr,
+                                  global_descriptor,
+                                  [](VulkanPass& target, PassRecordContext& context) {
+                                      target.recordRenderScopeDraw(context);
+                                  });
                 mark(index);
             }
             withRecordContext(scoped_passes[rstd::usize()],
                               rr,
+                              global_descriptor,
                               [](VulkanPass& target, PassRecordContext& context) {
                                   target.endRenderScope(context);
                               });

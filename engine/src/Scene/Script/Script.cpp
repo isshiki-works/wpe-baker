@@ -254,6 +254,31 @@ JSValue ScriptValueToJs(JSContext* ctx, const ScriptValue& value) {
     return JS_UNDEFINED;
 }
 
+bool SameJsValue(JSValueConst a, JSValueConst b) noexcept {
+    return JS_VALUE_GET_TAG(a) == JS_VALUE_GET_TAG(b) &&
+           JS_VALUE_GET_PTR(a) == JS_VALUE_GET_PTR(b);
+}
+
+bool SameScriptValue(const ScriptValue& a, const ScriptValue& b) noexcept {
+    if (a.index() != b.index()) return false;
+    if (std::holds_alternative<std::monostate>(a)) return true;
+    if (auto* pa = std::get_if<ScalarValue>(&a))
+        return std::memcmp(&pa->v, &std::get<ScalarValue>(b).v, sizeof(double)) == 0;
+    if (auto* pa = std::get_if<BoolValue>(&a))
+        return pa->v == std::get<BoolValue>(b).v;
+    if (auto* pa = std::get_if<Vec2Value>(&a))
+        return std::memcmp(pa, &std::get<Vec2Value>(b), sizeof(Vec2Value)) == 0;
+    if (auto* pa = std::get_if<Vec3Value>(&a))
+        return std::memcmp(pa, &std::get<Vec3Value>(b), sizeof(Vec3Value)) == 0;
+    if (auto* pa = std::get_if<Vec4Value>(&a))
+        return std::memcmp(pa, &std::get<Vec4Value>(b), sizeof(Vec4Value)) == 0;
+    if (auto* pa = std::get_if<ColorValue>(&a))
+        return std::memcmp(pa, &std::get<ColorValue>(b), sizeof(ColorValue)) == 0;
+    if (auto* pa = std::get_if<StringValue>(&a))
+        return pa->s == std::get<StringValue>(b).s;
+    return false;
+}
+
 // JSON → JSValue conversion for the initial-value seed. Recursive but
 // scenescript values are tiny (numbers, short strings, small objects).
 JSValue JsonToJs(JSContext* ctx, const NJson& value) {
@@ -451,6 +476,17 @@ struct EngineHostState {
     JSValue vec3_proto { JS_UNDEFINED };
     JSValue vec4_proto { JS_UNDEFINED };
     std::unordered_map<owe::SceneNode*, JSValue> layer_wrappers;
+    struct StringViewHash {
+        using is_transparent = void;
+        size_t operator()(std::string_view sv) const noexcept {
+            return std::hash<std::string_view> {}(sv);
+        }
+        size_t operator()(const std::string& s) const noexcept {
+            return std::hash<std::string_view> {}(s);
+        }
+    };
+    std::unordered_map<std::string, JSValue, StringViewHash, std::equal_to<>> root_layer_cache;
+    std::uint64_t root_layer_cache_epoch { 0 };
     // The original JS-side `thisLayer` / `thisScene` stubs, captured at
     // bootstrap. Per-script binding restores them when a script has no
     // backing SceneNode.
@@ -2347,11 +2383,11 @@ int MaterialSetProperty(JSContext* ctx, JSValueConst obj, JSAtom atom, JSValueCo
 // --- property accessors -----------------------------------------------------
 
 JSValue NodeGetOrigin(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "origin", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "origin", n);
     if (! n) return MakeVec3(ctx, 0, 0, 0);
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    if (host != nullptr) {
+    if (host != nullptr && ! host->node_origin_hooks.is_empty()) {
         auto hook = host->node_origin_hooks.get_mut(n);
         if (hook.is_some()) {
             const auto origin = (*(**hook).getter)();
@@ -2362,13 +2398,13 @@ JSValue NodeGetOrigin(JSContext* ctx, JSValueConst this_val) {
     return MakeVec3(ctx, v.x(), v.y(), v.z());
 }
 JSValue NodeSetOrigin(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    TraceDependency(ctx, "write", "origin", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "origin", n);
     if (! n) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
     if (! ReadXYZ(ctx, val, x, y, z)) return JS_UNDEFINED;
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    if (host != nullptr) {
+    if (host != nullptr && ! host->node_origin_hooks.is_empty()) {
         auto hook = host->node_origin_hooks.get_mut(n);
         if (hook.is_some()) {
             (*(**hook).setter)(Vec3Value { .x = x, .y = y, .z = z });
@@ -2379,15 +2415,15 @@ JSValue NodeSetOrigin(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     return JS_UNDEFINED;
 }
 JSValue NodeGetScale(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "scale", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "scale", n);
     if (! n) return MakeVec3(ctx, 1, 1, 1);
     auto v = n->Scale();
     return MakeVec3(ctx, v.x(), v.y(), v.z());
 }
 JSValue NodeSetScale(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    TraceDependency(ctx, "write", "scale", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "scale", n);
     if (! n) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
     if (! ReadXYZ(ctx, val, x, y, z)) return JS_UNDEFINED;
@@ -2398,15 +2434,15 @@ JSValue NodeSetScale(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
 constexpr double kRadToDeg = 180.0 / rstd::f64::consts::PI.to_primitive();
 constexpr double kDegToRad = rstd::f64::consts::PI.to_primitive() / 180.0;
 JSValue          NodeGetAngles(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "angles", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "angles", n);
     if (! n) return MakeVec3(ctx, 0, 0, 0);
     auto v = n->Rotation();
     return MakeVec3(ctx, v.x() * kRadToDeg, v.y() * kRadToDeg, v.z() * kRadToDeg);
 }
 JSValue NodeSetAngles(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    TraceDependency(ctx, "write", "angles", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "angles", n);
     if (! n) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
     if (! ReadXYZ(ctx, val, x, y, z)) return JS_UNDEFINED;
@@ -2415,8 +2451,8 @@ JSValue NodeSetAngles(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
 }
 
 JSValue NodeGetParallaxDepth(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "parallaxDepth", GetLayerNode(this_val));
     auto* node = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "parallaxDepth", node);
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     if (node == nullptr || host == nullptr || host->node_parallax_depth_getter.is_none())
         return MakeVec2Value(ctx, 0.0, 0.0);
@@ -2426,8 +2462,8 @@ JSValue NodeGetParallaxDepth(JSContext* ctx, JSValueConst this_val) {
 }
 
 JSValue NodeSetParallaxDepth(JSContext* ctx, JSValueConst this_val, JSValueConst value) {
-    TraceDependency(ctx, "write", "parallaxDepth", GetLayerNode(this_val));
     auto* node = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "parallaxDepth", node);
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     if (node == nullptr || host == nullptr || host->node_parallax_depth_setter.is_none())
         return JS_UNDEFINED;
@@ -2440,8 +2476,8 @@ JSValue NodeSetParallaxDepth(JSContext* ctx, JSValueConst this_val, JSValueConst
 
 // Stubs — properties scripts read but writing them would force RG rebuild.
 JSValue NodeGetSize(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "size", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "size", n);
     if (! n) return MakeVec3(ctx, 100, 100, 0);
     const auto& s = n->Size();
     // Zero is the parser's "unknown" sentinel (particle/light nodes never
@@ -2450,13 +2486,13 @@ JSValue NodeGetSize(JSContext* ctx, JSValueConst this_val) {
     return MakeVec3(ctx, s.x(), s.y(), 0);
 }
 JSValue NodeGetVisible(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "visible", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "visible", n);
     return JS_NewBool(ctx, n ? n->Visible() : true);
 }
 JSValue NodeSetVisible(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    TraceDependency(ctx, "write", "visible", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "visible", n);
     if (! n) return JS_UNDEFINED;
     const bool visible = JS_ToBool(ctx, val) != 0;
     auto*      host    = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
@@ -2467,13 +2503,13 @@ JSValue NodeSetVisible(JSContext* ctx, JSValueConst this_val, JSValueConst val) 
     return JS_UNDEFINED;
 }
 JSValue NodeGetAlpha(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "alpha", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "alpha", n);
     return JS_NewFloat64(ctx, n ? n->UserAlpha() : 1.0);
 }
 JSValue NodeSetAlpha(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    TraceDependency(ctx, "write", "alpha", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "alpha", n);
     if (! n) return JS_UNDEFINED;
     double a = 1.0;
     JS_ToFloat64(ctx, &a, val);
@@ -2481,13 +2517,13 @@ JSValue NodeSetAlpha(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     return JS_UNDEFINED;
 }
 JSValue NodeGetBrightness(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "brightness", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "brightness", n);
     return JS_NewFloat64(ctx, n ? n->Brightness() : 1.0);
 }
 JSValue NodeSetBrightness(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    TraceDependency(ctx, "write", "brightness", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "brightness", n);
     if (! n) return JS_UNDEFINED;
     double b = 1.0;
     JS_ToFloat64(ctx, &b, val);
@@ -2495,15 +2531,15 @@ JSValue NodeSetBrightness(JSContext* ctx, JSValueConst this_val, JSValueConst va
     return JS_UNDEFINED;
 }
 JSValue NodeGetColor(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "color", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "color", n);
     if (! n) return MakeVec3(ctx, 1, 1, 1);
     const auto& c = n->Color();
     return MakeVec3(ctx, c.x(), c.y(), c.z());
 }
 JSValue NodeSetColor(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    TraceDependency(ctx, "write", "color", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "color", n);
     if (! n) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
     if (! ReadXYZ(ctx, val, x, y, z)) return JS_UNDEFINED;
@@ -2833,6 +2869,15 @@ JSValue NodeGetName(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     return NodeGetNameValue(ctx, this_val);
 }
 
+void ClearRootLayerCache(JSContext* ctx, EngineHostState& host) {
+    if (ctx != nullptr) {
+        for (auto& [_name, val] : host.root_layer_cache) {
+            JS_FreeValue(ctx, val);
+        }
+    }
+    host.root_layer_cache.clear();
+}
+
 JSValue NodeGetLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     auto* n    = GetLayerNode(this_val);
@@ -2854,6 +2899,24 @@ JSValue NodeGetLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
     if (auto* active = host->active_field_script;
         active && active->m_impl->rt->script_costs.enabled) {
         probe = &active->m_impl->profile_get_layer;
+    }
+    if (host && n && n == host->scene_root &&
+        (! host->offline || ! host->offline->trace_scene)) {
+        const auto epoch = owe::SceneNode::CurrentTreeEpoch().to_primitive();
+        if (host->root_layer_cache_epoch != epoch) {
+            ClearRootLayerCache(ctx, *host);
+            host->root_layer_cache_epoch = epoch;
+        }
+        auto it = host->root_layer_cache.find(layer_name);
+        if (it != host->root_layer_cache.end()) {
+            JS_FreeCString(ctx, name);
+            return JS_DupValue(ctx, it->second);
+        }
+        owe::SceneNode* hit    = n->FindByName(layer_name);
+        JSValue         result = hit ? WrapLayerNode(ctx, hit) : JS_NULL;
+        host->root_layer_cache.emplace(std::string(layer_name), JS_DupValue(ctx, result));
+        JS_FreeCString(ctx, name);
+        return result;
     }
     std::chrono::steady_clock::time_point lookup_started, lookup_finished;
     if (probe) lookup_started = std::chrono::steady_clock::now();
@@ -4330,6 +4393,7 @@ JsRuntime::~JsRuntime() {
     for (auto& [_sha, ns] : m_impl->ns_by_sha) JS_FreeValue(m_impl->ctx, ns);
     m_impl->ns_by_sha.clear();
     if (! JS_IsUndefined(m_impl->wrapped_scene)) JS_FreeValue(m_impl->ctx, m_impl->wrapped_scene);
+    ClearRootLayerCache(m_impl->ctx, m_impl->host);
     for (auto& [_node, wrapper] : m_impl->host.layer_wrappers) {
         JS_FreeValue(m_impl->ctx, wrapper);
     }
@@ -4529,6 +4593,7 @@ void JsRuntime::RegisterAnimationLayer(owe::SceneNode* node, Arc<owe::PuppetLaye
 void JsRuntime::SetSceneRoot(owe::SceneNode* root) {
     if (! m_impl || ! m_impl->ctx) return;
     if (! JS_IsUndefined(m_impl->wrapped_scene)) JS_FreeValue(m_impl->ctx, m_impl->wrapped_scene);
+    ClearRootLayerCache(m_impl->ctx, m_impl->host);
     if (m_impl->host.scene_root != root) {
         m_impl->host.public_layers.erase(
             std::remove_if(m_impl->host.public_layers.begin(),
@@ -4673,6 +4738,9 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
 
     auto& costs = m_impl->script_costs;
     const bool profile_costs = costs.enabled;
+    JSValue      global      = JS_GetGlobalObject(ctx);
+    JSValueConst last_layer  = JS_UNDEFINED;
+    JSValueConst last_object = JS_UNDEFINED;
     for (size_t script_index = 0; script_index < m_impl->scripts.size(); ++script_index) {
         auto* fs = m_impl->scripts[script_index].get();
         auto* I  = fs->m_impl.get();
@@ -4682,7 +4750,17 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
         // unbound, restore the original stub captured at bootstrap.
         std::chrono::steady_clock::time_point cost_started;
         if (profile_costs) cost_started = std::chrono::steady_clock::now();
-        BindFieldScriptContext(ctx, *I, m_impl->host.default_layer);
+        JSValueConst layer =
+            JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer;
+        JSValueConst object = JS_IsUndefined(I->wrapped_object) ? layer : I->wrapped_object;
+        if (! SameJsValue(layer, last_layer)) {
+            JS_SetProperty(ctx, global, m_impl->host.atoms.this_layer, JS_DupValue(ctx, layer));
+            last_layer = layer;
+        }
+        if (! SameJsValue(object, last_object)) {
+            JS_SetProperty(ctx, global, m_impl->host.atoms.this_object, JS_DupValue(ctx, object));
+            last_object = object;
+        }
         if (profile_costs) costs.bind.Add(cost_started);
         m_impl->host.active_field_script = fs;
         JSValue ret;
@@ -4709,11 +4787,15 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
             continue;
         }
         if (profile_costs) cost_started = std::chrono::steady_clock::now();
-        I->last_value = CoerceReturn(ctx, ret, I->kind, m_impl->host.atoms);
+        ScriptValue next_last = CoerceReturn(ctx, ret, I->kind, m_impl->host.atoms);
+        const bool  same_value =
+            SameJsValue(ret, I->current_value) && SameScriptValue(next_last, I->last_value);
+        I->last_value = std::move(next_last);
         if (profile_costs) costs.coerce.Add(cost_started);
         // Keep the next argument in the field's coerced shape. Vec3 scripts
         // often return a scalar for scale, but still read value.x next frame.
-        if (I->update_takes_arg && ! std::holds_alternative<std::monostate>(I->last_value)) {
+        if (I->update_takes_arg && ! std::holds_alternative<std::monostate>(I->last_value) &&
+            ! same_value) {
             if (profile_costs) cost_started = std::chrono::steady_clock::now();
             JSValue next_value = ScriptValueToJs(ctx, I->last_value);
             JS_FreeValue(ctx, I->current_value);
@@ -4722,6 +4804,7 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
         }
         JS_FreeValue(ctx, ret);
     }
+    JS_FreeValue(ctx, global);
     m_impl->host.active_field_script = nullptr;
     if (profile_costs && ++costs.frames == 120) {
         std::fprintf(stderr,

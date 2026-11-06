@@ -24,8 +24,13 @@ struct TextureStatePreparer {
 class ResourceStateTracker final : public TextureStatePreparer {
 public:
     bool Compile(const resource::ResourcePlan& plan, const PreparedResourceTable& resources) {
-        m_textures.clear();
-        m_uses.clear();
+        if (m_uses.is_empty() && ! plan.textures.is_empty()) {
+            m_uses     = TextureUseMap::with_capacity(plan.textures.len());
+            m_textures = TextureMap::with_capacity(plan.textures.len());
+        } else {
+            m_textures.clear();
+            m_uses.clear();
+        }
         if (plan.generation != resources.Generation()) return false;
         for (const auto& entry : plan.textures) {
             auto prepared = resources.Resolve(entry.handle);

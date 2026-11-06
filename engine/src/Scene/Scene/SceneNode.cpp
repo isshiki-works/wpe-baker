@@ -22,6 +22,10 @@ void SceneNode::MarkTreeChanged() {
     scene_node_tree_epoch.fetch_add(1, std::memory_order_relaxed);
 }
 
+u64 SceneNode::CurrentTreeEpoch() noexcept {
+    return u64(scene_node_tree_epoch.load(std::memory_order_relaxed));
+}
+
 Matrix4d SceneNode::GetLocalTrans() const {
     Affine3d trans = Affine3d::Identity();
     trans.prescale(m_scale.cast<double>());

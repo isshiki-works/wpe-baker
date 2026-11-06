@@ -363,6 +363,7 @@ public:
     bool AddVertex(const float*);
     bool SetVertex(std::string_view name, slice<float> data) noexcept;
     bool SetVertexs(usize index, slice<float> data) noexcept;
+    float* MutableData(usize size) noexcept;
 
     template<typename Fill>
     [[nodiscard]] auto RewriteVertices(Fill&& fill) -> SceneVertexWriteResult {
@@ -944,6 +945,7 @@ public:
     struct Submesh {
         std::vector<SceneVertexArray> vertex_arrays;
         std::vector<SceneIndexArray>  index_arrays;
+        Option<SceneVertexArray>      position_only_vertex;
         std::vector<DrawRange>        draw_ranges;
         u32                           material_slot {};
         // Non-empty value redirects this submesh's pass output to the
@@ -1157,8 +1159,8 @@ public:
 
     // Reuse matrices until camera parameters or the attached node's effective
     // world transform change, including changes within the same frame.
-    Eigen::Matrix4d GetViewMatrix();
-    Eigen::Matrix4d
+    const Eigen::Matrix4d& GetViewMatrix();
+    const Eigen::Matrix4d&
     GetViewProjectionMatrix(SceneRenderViewKind view = SceneRenderViewKind::Primary);
 
     rstd::Option<SceneNode*> GetAttachedNode() const {
@@ -1200,8 +1202,8 @@ private:
     void RefreshNodeTransform();
     void CalculateViewMatrix();
     void CalculateProjectionMatrix();
-    void            CalculateViewProjectionMatrix();
-    Eigen::Matrix4d CalculateReflectionViewProjectionMatrix();
+    void                   CalculateViewProjectionMatrix();
+    const Eigen::Matrix4d& CalculateReflectionViewProjectionMatrix();
     void InvalidateView() {
         m_view_dirty = m_view_projection_dirty = m_reflection_dirty = true;
     }
@@ -1588,9 +1590,17 @@ public:
     }
 
     const auto& Camera() const { return m_cameraName; }
-    void        SetCamera(const std::string& name) { m_cameraName = name; }
+    void        SetCamera(const std::string& name) {
+        if (m_cameraName == name) return;
+        m_cameraName = name;
+        MarkTreeChanged();
+    }
     bool        Perspective() const { return m_perspective; }
-    void        SetPerspective(bool value) { m_perspective = value; }
+    void        SetPerspective(bool value) {
+        if (m_perspective == value) return;
+        m_perspective = value;
+        MarkTreeChanged();
+    }
     bool        Reflected() const { return m_reflected; }
     void        SetReflected(bool value) { m_reflected = value; }
     void        AddMesh(std::shared_ptr<SceneMesh> mesh) { m_mesh = mesh; }
@@ -1848,8 +1858,14 @@ public:
         MarkTransDirty();
     }
 
-    void            UpdateTrans();
-    Eigen::Matrix4d ModelTrans() const { return m_trans; };
+    void                   UpdateTrans();
+    const Eigen::Matrix4d& ModelTrans() const { return m_trans; }
+    void SetLastPrimaryMvp(const Eigen::Matrix4d& mvp) noexcept {
+        m_last_primary_mvp  = mvp;
+        m_has_primary_mvp   = true;
+    }
+    bool                   HasLastPrimaryMvp() const noexcept { return m_has_primary_mvp; }
+    const Eigen::Matrix4d& LastPrimaryMvp() const noexcept { return m_last_primary_mvp; }
 
     SceneMesh*                        Mesh() { return m_mesh.get(); }
     const std::shared_ptr<SceneMesh>& MeshShared() const { return m_mesh; }
@@ -1887,6 +1903,7 @@ public:
 
     // DFS over self + descendants; returns the first matching node.
     SceneNode* FindByName(std::string_view name);
+    static u64 CurrentTreeEpoch() noexcept;
 
     SceneNodeId              Identity() const { return m_identity; }
     Option<WallpaperLayerId> WallpaperIdentity() const { return m_wallpaper_identity; }
@@ -1918,6 +1935,8 @@ private:
 
     bool            m_dirty;
     Eigen::Matrix4d m_trans;
+    bool            m_has_primary_mvp { false };
+    Eigen::Matrix4d m_last_primary_mvp { Eigen::Matrix4d::Identity() };
 
     Eigen::Vector3f m_translate { 0.0f, 0.0f, 0.0f };
     Eigen::Vector3f m_scale { 1.0f, 1.0f, 1.0f };

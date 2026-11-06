@@ -88,6 +88,8 @@ struct UniformBufferUpdate {
                         resource::BufferContentWriter* buffers) const
         -> Result<empty, UniformBufferUpdateError>          = 0;
     virtual auto Buffer() const -> resource::BufferUseHandle = 0;
+    // 每次真正上传新字节时取一个全局递增序号；序号不变 = 缓冲内容与上次上传相同。
+    virtual auto UploadSerial() const -> u64 { return u64(); }
 };
 
 struct BoundUniformOutput {
@@ -160,6 +162,7 @@ public:
                 resource::BufferContentWriter*) const
         -> Result<empty, UniformBufferUpdateError> override;
     auto Buffer() const -> resource::BufferUseHandle override { return m_buffer; }
+    auto UploadSerial() const -> u64 override { return m_upload_serial; }
 
     auto WriteSlot(usize slot_index, UniformValueView value) const
         -> Result<bool, UniformBufferUpdateError>;
@@ -183,6 +186,7 @@ private:
     ShaderMatrixAbi        m_matrix_abi { ShaderMatrixAbi::NativeSpirv };
     bool                   m_disjoint_sources { false };
     mutable u64            m_material_version { 0 };
+    mutable u64            m_upload_serial { 0 };
     mutable bool           m_uploaded { false };
 };
 
@@ -195,6 +199,7 @@ public:
                 resource::BufferContentWriter*) const
         -> Result<empty, UniformBufferUpdateError> override;
     auto Buffer() const -> resource::BufferUseHandle override { return m_buffer; }
+    auto UploadSerial() const -> u64 override { return m_upload_serial; }
     auto WriteSlot(usize slot_index, UniformValueView value) const
         -> Result<bool, UniformBufferUpdateError>;
 
@@ -207,6 +212,7 @@ private:
     mutable rstd::vec::Vec<u8>      m_uploaded_data;
     ShaderMatrixConvention          m_matrix_convention { ShaderMatrixConvention::ColumnVector };
     ShaderMatrixAbi                 m_matrix_abi { ShaderMatrixAbi::NativeSpirv };
+    mutable u64                     m_upload_serial { 0 };
     mutable bool                    m_uploaded { false };
 };
 

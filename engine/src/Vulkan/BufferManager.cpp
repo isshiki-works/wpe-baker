@@ -469,30 +469,76 @@ bool BufferManager::RecordPendingUploads(vvk::CommandBuffer& cmd, RecordedBuffer
     for (const auto& block : m_impl->pending->blocks) {
         if (! block->Flush()) return false;
     }
+    std::vector<VkBufferCopy>         copy_regions;
+    copy_regions.reserve(m_impl->pending->copies.size());
+    VkBuffer                          cur_src = VK_NULL_HANDLE;
+    VkBuffer                          cur_dst = VK_NULL_HANDLE;
+    auto                              flush_copies = [&]() {
+        if (copy_regions.empty()) return;
+        cmd.CopyBuffer(cur_src,
+                       cur_dst,
+                       rstd::slice<VkBufferCopy>::from_raw_parts(copy_regions.data(),
+                                                                 rstd::usize(copy_regions.size())));
+        copy_regions.clear();
+    };
     for (const auto& copy : m_impl->pending->copies) {
-        cmd.CopyBuffer(copy.source->handle(),
-                       copy.destination,
-                       VkBufferCopy {
-                           .srcOffset = copy.source_offset,
-                           .dstOffset = copy.destination_offset,
-                           .size      = copy.size,
-                       });
+        const VkBuffer src = copy.source->handle();
+        const VkBuffer dst = copy.destination;
+        if (src != cur_src || dst != cur_dst) {
+            flush_copies();
+            cur_src = src;
+            cur_dst = dst;
+        }
+        if (! copy_regions.empty()) {
+            auto& prev = copy_regions.back();
+            if (prev.srcOffset + prev.size == copy.source_offset &&
+                prev.dstOffset + prev.size == copy.destination_offset) {
+                prev.size += copy.size;
+                continue;
+            }
+        }
+        copy_regions.push_back(VkBufferCopy {
+            .srcOffset = copy.source_offset,
+            .dstOffset = copy.destination_offset,
+            .size      = copy.size,
+        });
     }
+    flush_copies();
+
+    std::vector<VkBufferMemoryBarrier> barriers;
+    barriers.reserve(m_impl->pending->copies.size());
+    VkPipelineStageFlags dst_stages = 0;
     for (const auto& copy : m_impl->pending->copies) {
-        VkBufferMemoryBarrier barrier {
+        const VkAccessFlags dst_access = DestinationAccess(copy.usage);
+        dst_stages |= DestinationStages(copy.usage);
+        if (! barriers.empty()) {
+            auto& prev = barriers.back();
+            if (prev.buffer == copy.destination && prev.dstAccessMask == dst_access &&
+                prev.offset + prev.size == copy.destination_offset) {
+                prev.size += copy.size;
+                continue;
+            }
+        }
+        barriers.push_back(VkBufferMemoryBarrier {
             .sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
             .srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .dstAccessMask       = DestinationAccess(copy.usage),
+            .dstAccessMask       = dst_access,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer              = copy.destination,
             .offset              = copy.destination_offset,
             .size                = copy.size,
-        };
-        cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            DestinationStages(copy.usage),
-                            VK_DEPENDENCY_BY_REGION_BIT,
-                            barrier);
+        });
+    }
+    if (! barriers.empty()) {
+        cmd.PipelineBarrier(
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            dst_stages,
+            VK_DEPENDENCY_BY_REGION_BIT,
+            {},
+            rstd::slice<VkBufferMemoryBarrier>::from_raw_parts(barriers.data(),
+                                                               rstd::usize(barriers.size())),
+            {});
     }
     m_impl->pending->recorded = true;
     recorded                  = RecordedBufferUploads(this, m_impl->pending);

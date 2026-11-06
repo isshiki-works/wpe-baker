@@ -45,7 +45,8 @@ Vector3d SceneCamera::GetPosition(SceneRenderViewKind view) const {
     if (m_lookat) {
         position = m_eye;
     } else if (m_node) {
-        position = Affine3d(m_node->GetLocalTrans()) * Vector3d::Zero();
+        position =
+            (m_node->LocalFrame() * m_node->Translate().cast<double>().homogeneous()).head<3>();
     }
     if (view == SceneRenderViewKind::Reflection) position.y() = -position.y();
     return position;
@@ -107,18 +108,18 @@ bool SceneCamera::SetAuthoredTransforms(const SceneCameraTransforms& transforms)
     });
 }
 
-Matrix4d SceneCamera::GetViewMatrix() {
+const Matrix4d& SceneCamera::GetViewMatrix() {
     CalculateViewMatrix();
     return m_viewMat;
 }
 
-Matrix4d SceneCamera::GetViewProjectionMatrix(SceneRenderViewKind view) {
+const Matrix4d& SceneCamera::GetViewProjectionMatrix(SceneRenderViewKind view) {
     if (view == SceneRenderViewKind::Reflection) return CalculateReflectionViewProjectionMatrix();
     CalculateViewProjectionMatrix();
     return m_viewProjectionMat;
 }
 
-Matrix4d SceneCamera::CalculateReflectionViewProjectionMatrix() {
+const Matrix4d& SceneCamera::CalculateReflectionViewProjectionMatrix() {
     RefreshNodeTransform();
     CalculateProjectionMatrix();
     if (! m_reflection_dirty) return m_reflectionViewProjectionMat;
@@ -148,7 +149,7 @@ Matrix4d SceneCamera::CalculateReflectionViewProjectionMatrix() {
 void SceneCamera::RefreshNodeTransform() {
     if (m_lookat || m_node == nullptr) return;
     m_node->UpdateTrans();
-    const Matrix4d transform = m_node->ModelTrans();
+    const Matrix4d& transform = m_node->ModelTrans();
     if (m_node_transform_valid &&
         std::memcmp(m_node_transform.data(), transform.data(), 16 * sizeof(double)) == 0) return;
     m_node_transform = transform;

@@ -1543,116 +1543,201 @@ void MdlParser::GenMeshFromMdl(SceneMesh::Submesh& submesh, const Mdl::Mesh& src
                                                       : nullptr;
     const bool has_uv2   = has_uv && uv2 != nullptr && uv2->len() == usize(vert_num);
 
+    auto make_spec = [split_streams](VertexAttrSpec s) {
+        if (split_streams) s.padding = false;
+        return s;
+    };
+
     if (split_streams) {
-        auto             pos_attrs = MakeAttrSet({ VAttr::Position });
+        auto             pos_attrs = MakeAttrSet({ make_spec(VAttr::Position) });
         SceneVertexArray pos_vertex(pos_attrs, usize(vert_num));
-        float            pos_vert[3];
-        for (size_t i = 0; i < vert_num; ++i) {
-            pos_vert[0] = src.positions[usize(i)][usize(0)] + position_offset[usize(0)];
-            pos_vert[1] = src.positions[usize(i)][usize(1)] + position_offset[usize(1)];
-            pos_vert[2] = src.positions[usize(i)][usize(2)] + position_offset[usize(2)];
-            pos_vertex.SetVertexs(usize(i), rstd::slice<float>::from_raw_parts(pos_vert, usize(3)));
+        if (float* dst = pos_vertex.MutableData(usize(vert_num * 3))) {
+            const float ox = position_offset[usize(0)];
+            const float oy = position_offset[usize(1)];
+            const float oz = position_offset[usize(2)];
+            for (size_t i = 0; i < vert_num; ++i) {
+                const auto& p  = src.positions[usize(i)];
+                float       vx = p[usize(0)] + ox;
+                float       vy = p[usize(1)] + oy;
+                float       vz = p[usize(2)] + oz;
+                if (vx == 0.0f) vx = 0.0f;
+                if (vy == 0.0f) vy = 0.0f;
+                if (vz == 0.0f) vz = 0.0f;
+                dst[i * 3 + 0] = vx;
+                dst[i * 3 + 1] = vy;
+                dst[i * 3 + 2] = vz;
+            }
         }
         submesh.vertex_arrays.emplace_back(std::move(pos_vertex));
     }
 
     VertexAttrSpec specs[8];
     size_t         spec_count = 0;
-    if (! split_streams) specs[spec_count++] = VAttr::Position;
-    if (has_norm) specs[spec_count++] = VAttr::Normal;
-    if (! split_streams && has_tan) specs[spec_count++] = VAttr::Tangent4;
+    if (! split_streams) specs[spec_count++] = make_spec(VAttr::Position);
+    if (has_norm) specs[spec_count++] = make_spec(VAttr::Normal);
+    if (! split_streams && has_tan) specs[spec_count++] = make_spec(VAttr::Tangent4);
     if (has_blend) {
-        specs[spec_count++] = VAttr::BlendIndices;
-        specs[spec_count++] = VAttr::BlendWeights;
+        specs[spec_count++] = make_spec(VAttr::BlendIndices);
+        specs[spec_count++] = make_spec(VAttr::BlendWeights);
     }
-    if (has_uv) specs[spec_count++] = VAttr::TexCoord;
-    if (has_uv2) specs[spec_count++] = VAttr::TexCoordVec4;
+    if (has_uv) specs[spec_count++] = make_spec(VAttr::TexCoord);
+    if (has_uv2) specs[spec_count++] = make_spec(VAttr::TexCoordVec4);
 
     if (spec_count > 0) {
         auto             attrs = MakeAttrSet(std::span<const VertexAttrSpec>(specs, spec_count));
         SceneVertexArray vertex(attrs, usize(vert_num));
         size_t           stride_floats = 0;
         for (auto& a : attrs) stride_floats += SceneVertexArray::RealAttributeSize(a);
-        std::vector<float> one_vert(stride_floats);
+        const size_t pos_step  = split_streams ? 3 : 4;
+        const size_t norm_step = split_streams ? 3 : 4;
+        const size_t uv_step   = split_streams ? 2 : 4;
 
-        for (size_t i = 0; i < vert_num; ++i) {
-            size_t offset = 0;
-            if (! split_streams) {
-                one_vert[offset + 0] =
-                    src.positions[usize(i)][usize(0)] + position_offset[usize(0)];
-                one_vert[offset + 1] =
-                    src.positions[usize(i)][usize(1)] + position_offset[usize(1)];
-                one_vert[offset + 2] =
-                    src.positions[usize(i)][usize(2)] + position_offset[usize(2)];
-                offset += 4;
-            }
-            if (has_norm) {
-                std::memcpy(one_vert.data() + offset,
-                            src.normals[usize(i)].data(),
-                            sizeof(src.normals[usize(i)]));
-                offset += 4;
-            }
-            if (! split_streams && has_tan) {
-                std::memcpy(one_vert.data() + offset,
-                            src.tangents[usize(i)].data(),
-                            sizeof(src.tangents[usize(i)]));
-                offset += 4;
-            }
-            if (has_blend) {
-                std::memcpy(one_vert.data() + offset,
-                            src.blend_indices[usize(i)].data(),
-                            sizeof(src.blend_indices[usize(i)]));
-                offset += 4;
-                if (has_w) {
-                    std::memcpy(one_vert.data() + offset,
-                                src.blend_weights[usize(i)].data(),
-                                sizeof(src.blend_weights[usize(i)]));
-                } else {
-                    one_vert[offset + 0] = 1.0f;
-                    one_vert[offset + 1] = 0.0f;
-                    one_vert[offset + 2] = 0.0f;
-                    one_vert[offset + 3] = 0.0f;
+        if (float* dst_all = vertex.MutableData(usize(vert_num * stride_floats))) {
+            const float ox = position_offset[usize(0)];
+            const float oy = position_offset[usize(1)];
+            const float oz = position_offset[usize(2)];
+            const float sx = texcoord_scale[usize(0)];
+            const float sy = texcoord_scale[usize(1)];
+            for (size_t i = 0; i < vert_num; ++i) {
+                float* one_vert = dst_all + i * stride_floats;
+                size_t offset   = 0;
+                if (! split_streams) {
+                    one_vert[offset + 0] = src.positions[usize(i)][usize(0)] + ox;
+                    one_vert[offset + 1] = src.positions[usize(i)][usize(1)] + oy;
+                    one_vert[offset + 2] = src.positions[usize(i)][usize(2)] + oz;
+                    offset += pos_step;
                 }
-                offset += 4;
+                if (has_norm) {
+                    std::memcpy(one_vert + offset,
+                                src.normals[usize(i)].data(),
+                                sizeof(src.normals[usize(i)]));
+                    offset += norm_step;
+                }
+                if (! split_streams && has_tan) {
+                    std::memcpy(one_vert + offset,
+                                src.tangents[usize(i)].data(),
+                                sizeof(src.tangents[usize(i)]));
+                    offset += 4;
+                }
+                if (has_blend) {
+                    std::memcpy(one_vert + offset,
+                                src.blend_indices[usize(i)].data(),
+                                sizeof(src.blend_indices[usize(i)]));
+                    offset += 4;
+                    if (has_w) {
+                        std::memcpy(one_vert + offset,
+                                    src.blend_weights[usize(i)].data(),
+                                    sizeof(src.blend_weights[usize(i)]));
+                    } else {
+                        one_vert[offset + 0] = 1.0f;
+                        one_vert[offset + 1] = 0.0f;
+                        one_vert[offset + 2] = 0.0f;
+                        one_vert[offset + 3] = 0.0f;
+                    }
+                    offset += 4;
+                }
+                if (has_uv) {
+                    one_vert[offset + 0] = src.texcoords[usize(i)][usize(0)] * sx;
+                    one_vert[offset + 1] = src.texcoords[usize(i)][usize(1)] * sy;
+                    offset += uv_step;
+                }
+                if (has_uv2) {
+                    one_vert[offset + 0] = src.texcoords[usize(i)][usize(0)] * sx;
+                    one_vert[offset + 1] = src.texcoords[usize(i)][usize(1)] * sy;
+                    one_vert[offset + 2] = (*uv2)[usize(i)][usize(0)];
+                    one_vert[offset + 3] = (*uv2)[usize(i)][usize(1)];
+                    offset += 4;
+                }
             }
-            if (has_uv) {
-                one_vert[offset + 0] = src.texcoords[usize(i)][usize(0)] * texcoord_scale[usize(0)];
-                one_vert[offset + 1] = src.texcoords[usize(i)][usize(1)] * texcoord_scale[usize(1)];
-                offset += 4;
-            }
-            if (has_uv2) {
-                one_vert[offset + 0] = src.texcoords[usize(i)][usize(0)] * texcoord_scale[usize(0)];
-                one_vert[offset + 1] = src.texcoords[usize(i)][usize(1)] * texcoord_scale[usize(1)];
-                one_vert[offset + 2] = (*uv2)[usize(i)][usize(0)];
-                one_vert[offset + 3] = (*uv2)[usize(i)][usize(1)];
-                offset += 4;
-            }
-            vertex.SetVertexs(
-                usize(i),
-                rstd::slice<float>::from_raw_parts(one_vert.data(), usize(one_vert.size())));
         }
         submesh.vertex_arrays.emplace_back(std::move(vertex));
     }
 
     if (split_streams && has_tan) {
-        auto             tan_attrs = MakeAttrSet({ VAttr::Tangent4 });
+        auto             tan_attrs = MakeAttrSet({ make_spec(VAttr::Tangent4) });
         SceneVertexArray tan_vertex(tan_attrs, usize(vert_num));
-        for (size_t i = 0; i < vert_num; ++i) {
-            tan_vertex.SetVertexs(
-                usize(i),
-                rstd::slice<float>::from_raw_parts(src.tangents[usize(i)].data(), usize(4)));
+        if (float* dst = tan_vertex.MutableData(usize(vert_num * 4))) {
+            std::memcpy(dst, src.tangents.data(), vert_num * 4 * sizeof(float));
         }
         submesh.vertex_arrays.emplace_back(std::move(tan_vertex));
     }
 
     std::vector<uint32_t> indices;
-    indices.reserve(src.indices.len().to_primitive() * 3);
-    for (const auto& tri : src.indices) {
-        for (uint32_t v : tri) indices.push_back(v);
+    const size_t          total_indices = src.indices.len().to_primitive() * 3;
+    indices.resize(total_indices);
+    if (total_indices > 0) {
+        std::memcpy(indices.data(), src.indices.data(), total_indices * sizeof(uint32_t));
     }
 
     submesh.index_arrays.emplace_back(
         SceneIndexArray(slice<uint32_t>::from_raw_parts(indices.data(), usize(indices.size()))));
+
+    if (split_streams && ! has_blend && src.parts.is_empty() && total_indices > 0 &&
+        ! submesh.vertex_arrays.empty()) {
+        const float* pos_data = submesh.vertex_arrays[0].Data();
+        if (pos_data != nullptr) {
+            size_t table_cap = 1024;
+            while (table_cap < vert_num * 2) table_cap <<= 1;
+            const size_t          table_mask = table_cap - 1;
+            std::vector<uint32_t> hash_table(table_cap, UINT32_MAX);
+            std::vector<uint32_t> orig_to_compact(vert_num, UINT32_MAX);
+            std::vector<float>    compact_pos;
+            compact_pos.reserve(vert_num * 3);
+            std::vector<uint32_t> welded_indices(total_indices);
+            uint32_t              unique_count = 0;
+
+            for (size_t idx_i = 0; idx_i < total_indices; ++idx_i) {
+                const uint32_t v = indices[idx_i];
+                if (v >= vert_num) {
+                    welded_indices[idx_i] = v;
+                    continue;
+                }
+                uint32_t compact_id = orig_to_compact[v];
+                if (compact_id == UINT32_MAX) {
+                    const float*   p = pos_data + size_t(v) * 3;
+                    uint32_t       bx, by, bz;
+                    std::memcpy(&bx, p + 0, 4);
+                    std::memcpy(&by, p + 1, 4);
+                    std::memcpy(&bz, p + 2, 4);
+                    const uint64_t h = (uint64_t(bx) * 0x9E3779B185EBCA87ULL) ^
+                                       (uint64_t(by) * 0xC2B2AE3D27D4EB4FULL) ^
+                                       (uint64_t(bz) * 0x165667B19E3779F9ULL);
+                    size_t slot = size_t(h ^ (h >> 32)) & table_mask;
+                    while (true) {
+                        const uint32_t cand = hash_table[slot];
+                        if (cand == UINT32_MAX) {
+                            compact_id          = unique_count++;
+                            hash_table[slot]    = compact_id;
+                            orig_to_compact[v]  = compact_id;
+                            compact_pos.push_back(p[0]);
+                            compact_pos.push_back(p[1]);
+                            compact_pos.push_back(p[2]);
+                            break;
+                        }
+                        const float* cp = compact_pos.data() + size_t(cand) * 3;
+                        if (std::memcmp(cp, p, 12) == 0) {
+                            compact_id         = cand;
+                            orig_to_compact[v] = compact_id;
+                            break;
+                        }
+                        slot = (slot + 1) & table_mask;
+                    }
+                }
+                welded_indices[idx_i] = compact_id;
+            }
+
+            if (unique_count > 0 && size_t(unique_count) * 10 <= vert_num * 9) {
+                auto             pos_attrs = MakeAttrSet({ make_spec(VAttr::Position) });
+                SceneVertexArray compact_vertex(pos_attrs, usize(unique_count));
+                if (float* dst = compact_vertex.MutableData(usize(size_t(unique_count) * 3))) {
+                    std::memcpy(dst, compact_pos.data(), size_t(unique_count) * 3 * sizeof(float));
+                }
+                submesh.position_only_vertex = Some(std::move(compact_vertex));
+                submesh.index_arrays.emplace_back(SceneIndexArray(
+                    slice<uint32_t>::from_raw_parts(welded_indices.data(), usize(total_indices))));
+            }
+        }
+    }
 
     // V21 parts[] enumerates index sub-ranges in artist-chosen z-order. We
     // issue one DrawIndexed per range so each "part" is drawn as a separate
