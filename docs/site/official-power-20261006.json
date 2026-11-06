@@ -1,0 +1,379 @@
+{
+  "method": {
+    "date": "2026-10-06",
+    "official": "Installed Wallpaper Engine, desktop scene at 60 FPS. Per-host quality settings recorded below. The three sampled scenes have Bloom and HDR disabled.",
+    "official_settings": {
+      "5090": {
+        "fps": 60,
+        "resolution": "full",
+        "msaa": "x4",
+        "postprocessing": "ultra"
+      },
+      "B390": {
+        "fps": 60,
+        "resolution": "full",
+        "msaa": "none",
+        "postprocessing": "enabled"
+      }
+    },
+    "periodica": "Native complete RGBA output, effect scale 1, no layer or capture-target restriction. CPU readback and pipe delivery included; no video encoding. Fixed 60 FPS and uncapped output measured.",
+    "dimensions": {
+      "5090": [
+        3840,
+        2160
+      ],
+      "B390": [
+        3072,
+        1920
+      ]
+    },
+    "duration": "20-second samples after settling. Frame rate counts rendered/output frames.",
+    "isolation": "Other active wallpapers removed before each measurement; quiet baseline and zero sustained presentation verified. Original wallpaper assignments restored.",
+    "power": "GPU board power on NVIDIA, graphics-domain power on Intel. B390 package power already includes graphics. Component telemetry, not wall power.",
+    "discarded": "Earlier popup-window desktop comparisons are excluded."
+  },
+  "records": [
+    {
+      "fps": 59.9885337898597,
+      "measured_frames": 1151,
+      "measurement_seconds": 19.187000036239624,
+      "host": "5090",
+      "scene": "3669681034",
+      "resolution": "3840x2160",
+      "engine": "periodica",
+      "target_fps": 60,
+      "gpu_watts": 32.647499999999994,
+      "package_watts": 64.0863187585,
+      "components_watts": 96.7338187585,
+      "output_size": [
+        3840,
+        2160
+      ],
+      "gpu_joules_per_frame": 0.5442290040687515,
+      "components_joules_per_frame": 1.612538474391778
+    },
+    {
+      "fps": 59.98674247888414,
+      "displayed_fps": 59.68579174164936,
+      "output": "official_desktop",
+      "host": "5090",
+      "scene": "3669681034",
+      "resolution": "3840x2160",
+      "engine": "official",
+      "target_fps": 60,
+      "gpu_watts": 26.542499999999997,
+      "package_watts": 47.755031301399995,
+      "components_watts": 74.2975313014,
+      "output_size": [
+        3840,
+        2160
+      ],
+      "gpu_joules_per_frame": 0.44247276820112696,
+      "components_joules_per_frame": 1.2385658602407588
+    },
+    {
+      "fps": 112.88985570574617,
+      "measured_frames": 2179,
+      "measurement_seconds": 19.302000045776367,
+      "host": "5090",
+      "scene": "3669681034",
+      "resolution": "3840x2160",
+      "engine": "periodica_free",
+      "target_fps": 0,
+      "gpu_watts": 39.847,
+      "package_watts": 89.9878976064,
+      "components_watts": 129.8348976064,
+      "output_size": [
+        3840,
+        2160
+      ],
+      "gpu_joules_per_frame": 0.3529723707315516,
+      "components_joules_per_frame": 1.1501024320982574
+    },
+    {
+      "fps": 60.011971236111904,
+      "displayed_fps": 60.00243645953589,
+      "output": "official_desktop",
+      "host": "5090",
+      "scene": "3258032485",
+      "resolution": "3840x2160",
+      "engine": "official",
+      "target_fps": 60,
+      "gpu_watts": 23.311500000000002,
+      "package_watts": 70.90103647354998,
+      "components_watts": 94.21253647354999,
+      "output_size": [
+        3840,
+        2160
+      ],
+      "gpu_joules_per_frame": 0.3884474967216612,
+      "components_joules_per_frame": 1.5698957146879733
+    },
+    {
+      "fps": 59.96792008774771,
+      "measured_frames": 1159,
+      "measurement_seconds": 19.3270001411438,
+      "host": "5090",
+      "scene": "3258032485",
+      "resolution": "3840x2160",
+      "engine": "periodica",
+      "target_fps": 60,
+      "gpu_watts": 25.146499999999996,
+      "package_watts": 77.17445739725,
+      "components_watts": 102.32095739725,
+      "output_size": [
+        3840,
+        2160
+      ],
+      "gpu_joules_per_frame": 0.41933253584924285,
+      "components_joules_per_frame": 1.7062615686441926
+    },
+    {
+      "fps": 114.24270716784432,
+      "measured_frames": 2201,
+      "measurement_seconds": 19.266000032424927,
+      "host": "5090",
+      "scene": "3258032485",
+      "resolution": "3840x2160",
+      "engine": "periodica_free",
+      "target_fps": 0,
+      "gpu_watts": 30.63350000000001,
+      "package_watts": 81.99601064645,
+      "components_watts": 112.62951064645002,
+      "output_size": [
+        3840,
+        2160
+      ],
+      "gpu_joules_per_frame": 0.26814403089199873,
+      "components_joules_per_frame": 0.9858792166135891
+    },
+    {
+      "fps": 59.99116347187922,
+      "displayed_fps": 59.98648791841583,
+      "output": "official_desktop",
+      "host": "5090",
+      "scene": "3650475846",
+      "resolution": "3840x2160",
+      "engine": "official",
+      "target_fps": 60,
+      "gpu_watts": 34.253499999999995,
+      "package_watts": 57.28527317165,
+      "components_watts": 91.53877317164999,
+      "output_size": [
+        3840,
+        2160
+      ],
+      "gpu_joules_per_frame": 0.5709757573889408,
+      "components_joules_per_frame": 1.5258709428857582
+    },
+    {
+      "fps": 60.008348880180385,
+      "measured_frames": 1150,
+      "measurement_seconds": 19.164000034332275,
+      "host": "5090",
+      "scene": "3650475846",
+      "resolution": "3840x2160",
+      "engine": "periodica",
+      "target_fps": 60,
+      "gpu_watts": 38.3575,
+      "package_watts": 75.76893254445001,
+      "components_watts": 114.12643254445001,
+      "output_size": [
+        3840,
+        2160
+      ],
+      "gpu_joules_per_frame": 0.639202722884261,
+      "components_joules_per_frame": 1.9018425714783131
+    },
+    {
+      "fps": 112.28033862532526,
+      "measured_frames": 2166,
+      "measurement_seconds": 19.29099988937378,
+      "host": "5090",
+      "scene": "3650475846",
+      "resolution": "3840x2160",
+      "engine": "periodica_free",
+      "target_fps": 0,
+      "gpu_watts": 54.81949999999999,
+      "package_watts": 78.8896104518,
+      "components_watts": 133.70911045179997,
+      "output_size": [
+        3840,
+        2160
+      ],
+      "gpu_joules_per_frame": 0.4882377508935945,
+      "components_joules_per_frame": 1.1908506163129915
+    },
+    {
+      "fps": 60.006057959375916,
+      "displayed_fps": 60.00676009433943,
+      "output": "official_desktop",
+      "host": "B390",
+      "scene": "3669681034",
+      "resolution": "3072x1920",
+      "engine": "official",
+      "target_fps": 60,
+      "gpu_watts": 12.30213236765,
+      "package_watts": 23.200857778099994,
+      "components_watts": 23.200857778099994,
+      "output_size": [
+        3072,
+        1920
+      ],
+      "gpu_joules_per_frame": 0.20501483993463693,
+      "components_joules_per_frame": 0.38664192528372665
+    },
+    {
+      "fps": 59.98023185899789,
+      "measured_frames": 1153,
+      "measurement_seconds": 19.223000049591064,
+      "host": "B390",
+      "scene": "3669681034",
+      "resolution": "3072x1920",
+      "engine": "periodica",
+      "target_fps": 60,
+      "gpu_watts": 6.8898119612,
+      "package_watts": 20.730116604699997,
+      "components_watts": 20.730116604699997,
+      "output_size": [
+        3072,
+        1920
+      ],
+      "gpu_joules_per_frame": 0.11486804481510904,
+      "components_joules_per_frame": 0.3456158131137698
+    },
+    {
+      "fps": 103.10572035308088,
+      "measured_frames": 1972,
+      "measurement_seconds": 19.125999927520752,
+      "host": "B390",
+      "scene": "3669681034",
+      "resolution": "3072x1920",
+      "engine": "periodica_free",
+      "target_fps": 0,
+      "gpu_watts": 20.462045266999997,
+      "package_watts": 38.087055845150005,
+      "components_watts": 38.087055845150005,
+      "output_size": [
+        3072,
+        1920
+      ],
+      "gpu_joules_per_frame": 0.1984569352401462,
+      "components_joules_per_frame": 0.3693980868832748
+    },
+    {
+      "fps": 60.004026425312794,
+      "displayed_fps": 60.00339101732703,
+      "output": "official_desktop",
+      "host": "B390",
+      "scene": "3258032485",
+      "resolution": "3072x1920",
+      "engine": "official",
+      "target_fps": 60,
+      "gpu_watts": 4.10619862805,
+      "package_watts": 13.80708189065,
+      "components_watts": 13.80708189065,
+      "output_size": [
+        3072,
+        1920
+      ],
+      "gpu_joules_per_frame": 0.06843205152509221,
+      "components_joules_per_frame": 0.23010258999595168
+    },
+    {
+      "fps": 60.05521157882525,
+      "measured_frames": 1153,
+      "measurement_seconds": 19.198999881744385,
+      "host": "B390",
+      "scene": "3258032485",
+      "resolution": "3072x1920",
+      "engine": "periodica",
+      "target_fps": 60,
+      "gpu_watts": 2.9230059053,
+      "package_watts": 15.630887126149995,
+      "components_watts": 15.630887126149995,
+      "output_size": [
+        3072,
+        1920
+      ],
+      "gpu_joules_per_frame": 0.04867197747631643,
+      "components_joules_per_frame": 0.26027528194840727
+    },
+    {
+      "fps": 122.33903473683509,
+      "measured_frames": 2339,
+      "measurement_seconds": 19.11899995803833,
+      "host": "B390",
+      "scene": "3258032485",
+      "resolution": "3072x1920",
+      "engine": "periodica_free",
+      "target_fps": 0,
+      "gpu_watts": 9.67046154715,
+      "package_watts": 26.871192132099992,
+      "components_watts": 26.871192132099992,
+      "output_size": [
+        3072,
+        1920
+      ],
+      "gpu_joules_per_frame": 0.0790464103951142,
+      "components_joules_per_frame": 0.21964528484226578
+    },
+    {
+      "fps": 59.993943769255274,
+      "displayed_fps": 59.99531224597839,
+      "output": "official_desktop",
+      "host": "B390",
+      "scene": "3650475846",
+      "resolution": "3072x1920",
+      "engine": "official",
+      "target_fps": 60,
+      "gpu_watts": 22.340694399349996,
+      "package_watts": 34.35605063129999,
+      "components_watts": 34.35605063129999,
+      "output_size": [
+        3072,
+        1920
+      ],
+      "gpu_joules_per_frame": 0.3723824938943053,
+      "components_joules_per_frame": 0.5726586464033429
+    },
+    {
+      "fps": 59.2977888955726,
+      "measured_frames": 1140,
+      "measurement_seconds": 19.225000143051147,
+      "host": "B390",
+      "scene": "3650475846",
+      "resolution": "3072x1920",
+      "engine": "periodica",
+      "target_fps": 60,
+      "gpu_watts": 20.952062647699996,
+      "package_watts": 36.43013639669999,
+      "components_watts": 36.43013639669999,
+      "output_size": [
+        3072,
+        1920
+      ],
+      "gpu_joules_per_frame": 0.353336322280043,
+      "components_joules_per_frame": 0.6143591030157283
+    },
+    {
+      "fps": 61.651319010695744,
+      "measured_frames": 1185,
+      "measurement_seconds": 19.22099995613098,
+      "host": "B390",
+      "scene": "3650475846",
+      "resolution": "3072x1920",
+      "engine": "periodica_free",
+      "target_fps": 0,
+      "gpu_watts": 22.391334369849996,
+      "package_watts": 38.55158547410001,
+      "components_watts": 38.55158547410001,
+      "output_size": [
+        3072,
+        1920
+      ],
+      "gpu_joules_per_frame": 0.3631931113422793,
+      "components_joules_per_frame": 0.6253164748577688
+    }
+  ]
+}
