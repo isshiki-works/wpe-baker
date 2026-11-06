@@ -444,6 +444,11 @@ void RenderGraph::reusePreviousAllocation(TextureNodeRef ref) {
     rstd_assert(node.is_some());
     if (node.is_none() || node->previous.is_none()) return;
     node->allocation_parent = node->previous;
+    if (auto prev = getTexNode(*node->previous); prev.is_some()) {
+        node->allocation_family = prev->allocation_family.is_some()
+                                      ? Some(prev->allocation_family->clone())
+                                      : None<String>();
+    }
 }
 
 void RenderGraph::connectTextureRead(TextureNodeRef ref, NodeHandle pass_node) {

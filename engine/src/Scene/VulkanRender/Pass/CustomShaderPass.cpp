@@ -1592,6 +1592,96 @@ auto CustomShaderPass::shadowAtlasSignature(slice<const UniformBufferUpdate*> up
     return Some(u64(state));
 }
 
+auto CustomShaderPass::staticReuseInfo(const resource_registry::PreparedResourceTable& resources,
+                                       slice<const UniformBufferUpdate*>               updates) const
+    -> StaticPassReuseInfo {
+    StaticPassReuseInfo info {};
+    auto resolve_image = [&](const Option<resource::TextureUseHandle>& use) -> VkImage {
+        if (use.is_none()) return VK_NULL_HANDLE;
+        auto resolved = resources.Resolve(*use);
+        if (resolved.is_none()) return VK_NULL_HANDLE;
+        return (**resolved).image.getActive().handle;
+    };
+    if (! m_desc.depth_only) {
+        info.written_images[usize(0)] = resolve_image(m_desc.output_use);
+        info.written_images[usize(1)] = resolve_image(m_desc.output_msaa_use);
+    }
+    if (m_desc.has_depth_attachment) {
+        info.written_images[usize(2)] = resolve_image(m_desc.depth_use);
+    }
+    info.loads_previous_attachment =
+        (! m_desc.depth_only && m_desc.color_load_op == VK_ATTACHMENT_LOAD_OP_LOAD) ||
+        (m_desc.has_depth_attachment && m_desc.depth_load_op == VK_ATTACHMENT_LOAD_OP_LOAD);
+
+    const bool has_written = info.written_images[usize(0)] != VK_NULL_HANDLE ||
+                             info.written_images[usize(1)] != VK_NULL_HANDLE ||
+                             info.written_images[usize(2)] != VK_NULL_HANDLE;
+    if (! prepared() || m_desc.m2_active || m_desc.draw_buffers.dynamic || ! has_written ||
+        (m_desc.has_depth_attachment && ! m_desc.depth_only) ||
+        m_desc.vk_tex_binding.size() != m_desc.texture_bindings.size() ||
+        m_desc.descriptor_image_slots.size() != m_desc.texture_bindings.size()) {
+        return info;
+    }
+
+    rstd::uint64_t state = 1469598103934665603ULL;
+    MixSignature(state, m_desc.prepare_serial.to_primitive());
+    MixSignature(state, reinterpret_cast<rstd::uint64_t>(m_desc.vk_framebuffer));
+    MixSignature(state, m_desc.instance_count.to_primitive());
+    MixSignature(state, m_desc.draw_buffers.draw_count.to_primitive());
+    MixSignature(state, m_desc.clear_depth ? 1u : 0u);
+    MixSignature(state, m_desc.clear_output ? 1u : 0u);
+    if (m_desc.clear_output) {
+        for (rstd::usize c {}; c < rstd::usize(4); ++c) {
+            MixSignature(state, m_desc.clear_value.color.uint32[c.to_primitive()]);
+        }
+    }
+    bool visible = true;
+    if (m_desc.node.is_some()) {
+        for (auto* node = m_desc.node->as_raw_ptr(); node != nullptr; node = node->Parent()) {
+            if (! node->Visible()) {
+                visible = false;
+                break;
+            }
+        }
+    }
+    MixSignature(state, visible ? 1u : 0u);
+    for (std::size_t i = 0; i < m_desc.texture_bindings.size(); ++i) {
+        if (m_desc.vk_tex_binding[i] < 0) continue;
+        const auto& binding = m_desc.texture_bindings[i];
+        if (binding.empty() || binding.use.is_none()) continue;
+        auto prepared_tex = resources.Resolve(*binding.use);
+        if (prepared_tex.is_none()) return info;
+        const auto& slots = (**prepared_tex).image.slots;
+        const auto  slot  = m_desc.descriptor_image_slots[i];
+        if (slot < 0 || slot >= std::ssize(slots)) return info;
+        const auto& img = slots[static_cast<std::size_t>(slot)];
+        if (i < 16) info.sampled_images[usize(i)] = img.handle;
+        MixSignature(state, static_cast<rstd::uint64_t>(slot));
+        MixSignature(state, reinterpret_cast<rstd::uint64_t>(img.handle));
+        MixSignature(state, img.generation.to_primitive());
+        MixSignature(state, (**prepared_tex).physical_generation.to_primitive());
+        MixSignature(state,
+                     (**prepared_tex).physical
+                         ? (**prepared_tex).physical->ContentSerial().to_primitive()
+                         : 0ULL);
+    }
+    for (const auto& use : m_desc.uniform_block_uses) {
+        const UniformBufferUpdate* owner = nullptr;
+        for (const auto* update : updates) {
+            if (update->Buffer() == use.use) {
+                owner = update;
+                break;
+            }
+        }
+        if (owner == nullptr || owner->UploadSerial() == u64()) return info;
+        MixSignature(state, owner->UploadSerial().to_primitive());
+    }
+    if (state == 0) state = 1;
+    info.eligible  = true;
+    info.signature = u64(state);
+    return info;
+}
+
 bool CustomShaderPass::supportsRenderScope() const { return prepared(); }
 
 bool CustomShaderPass::canJoinRenderScopeAfter(const VulkanPass& previous) const {

@@ -135,6 +135,8 @@ public:
     bool prepareResourceStates(
         resource_registry::TextureStatePreparer*) override;
     auto shadowAtlasSignature(slice<const UniformBufferUpdate*>) const -> Option<u64> override;
+    auto staticReuseInfo(const resource_registry::PreparedResourceTable&,
+                         slice<const UniformBufferUpdate*>) const -> StaticPassReuseInfo override;
     Option<RenderItemId>                      renderItemId() const override;
     Option<PipelineCacheKey>                  pipelineCacheKey() const override;
     bool                                      pipelineCacheHit() const override;

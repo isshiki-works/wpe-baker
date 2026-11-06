@@ -277,6 +277,8 @@ struct TextureAllocationRuntime {
     virtual ~TextureAllocationRuntime() = default;
 
     virtual void Pump(double seconds) = 0;
+
+    u64 content_serial { 1 };
 };
 
 class TextureAllocation {
@@ -286,10 +288,15 @@ public:
         : m_slots(rstd::move(slots)), m_runtime(rstd::move(runtime)) {}
 
     auto View() const -> ImageSlotsRef { return ImageSlotsRef(m_slots); }
+    auto ContentSerial() const noexcept -> u64 {
+        return m_runtime ? m_runtime->content_serial : m_content_serial;
+    }
+    void BumpContentSerial() const noexcept { ++m_content_serial; }
 
 private:
     ImageSlots                                m_slots;
     std::shared_ptr<TextureAllocationRuntime> m_runtime;
+    mutable u64                               m_content_serial { 1 };
 };
 
 // ---------- Swapchain.hpp ----------

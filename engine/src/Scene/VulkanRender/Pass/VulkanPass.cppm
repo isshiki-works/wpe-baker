@@ -348,6 +348,17 @@ public:
     virtual auto shadowAtlasSignature(slice<const UniformBufferUpdate*>) const -> Option<u64> {
         return None();
     }
+    struct StaticPassReuseInfo {
+        bool                     eligible { false };
+        bool                     loads_previous_attachment { false };
+        rstd::array<VkImage, 3>  written_images {};
+        rstd::array<VkImage, 16> sampled_images {};
+        u64                      signature {};
+    };
+    virtual auto staticReuseInfo(const resource_registry::PreparedResourceTable&,
+                                 slice<const UniformBufferUpdate*>) const -> StaticPassReuseInfo {
+        return {};
+    }
     virtual Option<RenderItemId>        renderItemId() const { return None(); }
     virtual Option<PipelineCacheKey>    pipelineCacheKey() const { return None(); }
     virtual bool                        pipelineCacheHit() const { return false; }

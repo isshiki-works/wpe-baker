@@ -196,9 +196,11 @@ struct RenderProgram {
     bool                                                    loaded { false };
     // 上一帧画阴影图时全部写入 pass 的输入指纹；None = 上一帧没画或无法判定。
     Option<u64>                                             last_shadow_signature;
+    rstd::vec::Vec<Option<u64>>                             last_scope_signatures;
 
     void clear() {
         last_shadow_signature = None();
+        last_scope_signatures.clear();
         uniform_updates.clear();
         uniform_update_owners.clear();
         resource_prepare_session = rstd::None();
@@ -1163,6 +1165,7 @@ struct RenderProgram {
 
     void rebuildScopes() {
         scopes.clear();
+        last_scope_signatures.clear();
         scopes_dirty              = false;
         auto pending_scope_passes = rstd::vec::Vec<rstd::usize>::make();
 
@@ -1322,12 +1325,123 @@ struct RenderProgram {
         const bool reuse_shadow = shadow_signature.is_some() && last_shadow_signature.is_some() &&
                                   *shadow_signature == *last_shadow_signature;
         last_shadow_signature   = shadow_signature;
-        auto reused = [&](rstd::usize index) {
-            if (! reuse_shadow) return false;
+
+        const auto pass_count = pass_records.len().to_primitive();
+        std::vector<VulkanPass::StaticPassReuseInfo> pass_reuse(pass_count);
+        for (rstd::usize index {}; index < pass_records.len(); ++index) {
+            if (! pass_records[index].active_in_frame) continue;
+            auto pass = resolve(pass_records[index]);
+            if (! pass || ! pass->prepared()) continue;
+            pass_reuse[index.to_primitive()] =
+                pass->staticReuseInfo(rr.resources.Prepared(), uniform_updates.as_slice());
+        }
+        while (last_scope_signatures.len() < scopes.len()) {
+            last_scope_signatures.push(None<u64>());
+        }
+        std::vector<bool> reused_passes(pass_count, false);
+        if (reuse_shadow) {
             for (auto writer : shadow_writers) {
-                if (writer == index) return true;
+                reused_passes[writer.to_primitive()] = true;
+            }
+        }
+        auto passTouchesTargetImage = [&](rstd::usize q, VkImage target) -> bool {
+            if (target == VK_NULL_HANDLE) return false;
+            const auto& q_info = pass_reuse[q.to_primitive()];
+            bool        has_w  = false;
+            for (rstd::usize k {}; k < rstd::usize(3); ++k) {
+                const VkImage w = q_info.written_images[k];
+                if (w != VK_NULL_HANDLE) {
+                    has_w = true;
+                    if (w == target) return true;
+                }
+            }
+            if (has_w) return false;
+            for (const auto& tex_use : pass_records[q].resources.textures) {
+                auto resolved = rr.resources.Prepared().Resolve(tex_use);
+                if (resolved.is_some() && (**resolved).image.getActive().handle == target) {
+                    return true;
+                }
             }
             return false;
+        };
+        for (rstd::usize s_idx {}; s_idx < scopes.len(); ++s_idx) {
+            const auto& scope = scopes[s_idx];
+            if (scope.single.is_some() || scope.scoped_passes.is_empty()) {
+                last_scope_signatures[s_idx] = None<u64>();
+                continue;
+            }
+            const auto& scoped = scope.scoped_passes;
+            if (std::all_of(scoped.begin(), scoped.end(), [&](rstd::usize p) {
+                    return reused_passes[p.to_primitive()];
+                })) {
+                continue;
+            }
+            bool           eligible  = true;
+            rstd::uint64_t scope_sig = 1469598103934665603ULL;
+            for (rstd::usize i {}; i < scoped.len(); ++i) {
+                const auto  p    = scoped[i];
+                const auto& info = pass_reuse[p.to_primitive()];
+                if (! info.eligible || (i == rstd::usize() && info.loads_previous_attachment)) {
+                    eligible = false;
+                    break;
+                }
+                scope_sig ^= info.signature.to_primitive();
+                scope_sig *= 1099511628211ULL;
+            }
+            if (! eligible) {
+                last_scope_signatures[s_idx] = None<u64>();
+                continue;
+            }
+            const auto& targets         = pass_reuse[scoped[rstd::usize()].to_primitive()].written_images;
+            bool        other_writer    = false;
+            bool        upstream_redraw = false;
+            for (rstd::usize q {}; q < pass_records.len(); ++q) {
+                if (! pass_records[q].active_in_frame) continue;
+                bool in_scope = false;
+                for (auto p : scoped) {
+                    if (p == q) {
+                        in_scope = true;
+                        break;
+                    }
+                }
+                if (in_scope) continue;
+                for (rstd::usize k {}; k < rstd::usize(3); ++k) {
+                    if (targets[k] != VK_NULL_HANDLE && passTouchesTargetImage(q, targets[k])) {
+                        other_writer = true;
+                        break;
+                    }
+                }
+                if (other_writer) break;
+                if (! reused_passes[q.to_primitive()]) {
+                    for (auto p : scoped) {
+                        const auto& s_imgs = pass_reuse[p.to_primitive()].sampled_images;
+                        for (rstd::usize si {}; si < rstd::usize(16); ++si) {
+                            if (s_imgs[si] != VK_NULL_HANDLE && passTouchesTargetImage(q, s_imgs[si])) {
+                                upstream_redraw = true;
+                                break;
+                            }
+                        }
+                        if (upstream_redraw) break;
+                    }
+                }
+            }
+            if (other_writer) {
+                last_scope_signatures[s_idx] = None<u64>();
+                continue;
+            }
+            if (scope_sig == 0) scope_sig = 1;
+            const u64 sig_u64(scope_sig);
+            if (! upstream_redraw && last_scope_signatures[s_idx].is_some() &&
+                *last_scope_signatures[s_idx] == sig_u64) {
+                for (auto p : scoped) {
+                    reused_passes[p.to_primitive()] = true;
+                }
+            }
+            last_scope_signatures[s_idx] = Some(u64(scope_sig));
+        }
+
+        auto reused = [&](rstd::usize index) {
+            return reused_passes[index.to_primitive()];
         };
         auto skipReused = [&](rstd::usize index) {
             withRecordContext(index,

@@ -504,6 +504,18 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
 
     std::shared_ptr<const EffectMaskSupport> m2_candidate =
         effect_node != nullptr && mesh->Submeshes().size() == 1 ? extra.m2_candidate : nullptr;
+    bool isolate_static_base =
+        effect_node == nullptr && imgeff != nullptr && ! mesh->Dynamic() &&
+        mesh->Submeshes().size() == 1;
+    if (isolate_static_base) {
+        for (auto* eff : imgeff->ResolvedEffects()) {
+            if (eff == nullptr || eff->nodes.empty()) continue;
+            if (eff->nodes.front().mask_support != nullptr) {
+                isolate_static_base = false;
+            }
+            break;
+        }
+    }
     const bool draw_source = imgeff == nullptr || imgeff->RequiresSourceDraw();
     for (std::size_t smi = 0; draw_source && smi < mesh->Submeshes().size(); smi++) {
         const auto& submesh       = mesh->Submeshes()[smi];
@@ -537,6 +549,7 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
              render_view,
              effect_node,
              m2_candidate,
+             isolate_static_base,
              texture0_override = std::string(texture0_override),
              &scene,
              &extra](rg::RenderGraphBuilder& builder, vulkan::CustomShaderPass::Desc& pdesc) {
@@ -581,8 +594,11 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
                     *material, pass_output, extra, builder, pdesc, reuses_previous_output,
                     texture0_override);
 
-                auto output_node =
-                    builder.createTexture(MakeTextureDesc(extra, pass_output_s), true);
+                auto output_desc = MakeTextureDesc(extra, pass_output_s);
+                if (isolate_static_base && output_desc.allocation_family.is_some()) {
+                    output_desc.allocation_family = Some(rstd::format("{}::base", pass_output_s));
+                }
+                auto output_node = builder.createTexture(output_desc, true);
                 auto output_state = builder.textureState(output_node);
                 rstd_assert(output_state.is_some());
                 if (output_state.is_none()) return;
@@ -661,15 +677,17 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
                     pdesc.m2_alias_use   = m2_writes[0].use;
                 }
                 // 变化集只取决于效果本身（C_i ⊆ M_i），与本 pass 最后是否受限无关。
-                m2_writes.push_back(ExtraInfo::M2Write {
-                    .version = version,
-                    .use     = Some(output_state->use),
-                    .change  = (m2_candidate && ! material_override && ! reuses_previous_output &&
-                               ! preserve_output && output_target.sample_count == 1)
-                                   ? m2_candidate
-                                   : nullptr,
-                });
-                if (m2_writes.size() > 2) m2_writes.erase(m2_writes.begin());
+                if (! isolate_static_base) {
+                    m2_writes.push_back(ExtraInfo::M2Write {
+                        .version = version,
+                        .use     = Some(output_state->use),
+                        .change  = (m2_candidate && ! material_override && ! reuses_previous_output &&
+                                   ! preserve_output && output_target.sample_count == 1)
+                                       ? m2_candidate
+                                       : nullptr,
+                    });
+                    if (m2_writes.size() > 2) m2_writes.erase(m2_writes.begin());
+                }
                 builder.write(output_node);
             });
     }

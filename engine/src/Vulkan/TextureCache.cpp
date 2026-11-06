@@ -916,6 +916,7 @@ void TextureCache::VideoRegistry::Runtime::Pump(double dt_seconds) {
         return;
     }
     s.convert_pending = false;
+    ++s.content_serial;
     publish_time();
 }
 
@@ -1036,6 +1037,7 @@ bool TextureCache::UploadFontAtlasRegion(ref<TextureAllocation> texture, const r
     };
     VVK_CHECK(m_device.graphics_queue().handle.Submit(si));
     VVK_CHECK(m_device.handle().WaitIdle());
+    texture->BumpContentSerial();
     return true;
 }
 
