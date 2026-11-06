@@ -90,6 +90,7 @@ struct ExtraInfo {
         rg::NodeHandle consumer_pass;
         SceneNode* node;
         u32 submesh;
+        u32 instance_count { 1 };
     };
     std::vector<EmptyDrawSnapshot> empty_draw_snapshots;
     // 帧间反馈之一：帧内首次写入 LOAD 叠在上一帧残留上。先读后写的纹理见 RenderGraph::frameBoundaries。
@@ -239,6 +240,7 @@ static rg::TextureNodeRef AddCopyPass(ExtraInfo& extra, rg::TextureNodeRef in,
             .consumer_pass = consumer_pass,
             .node = consumer->node->as_raw_ptr(),
             .submesh = consumer->submesh_index,
+            .instance_count = consumer->instance_count,
         });
     }
     return copy;
@@ -997,7 +999,10 @@ Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
         auto pass = rgraph->getPass(state->pass);
         if (pass.is_none()) continue;
         auto* copy = dynamic_cast<vulkan::CopyPass*>(&*pass);
-        if (copy != nullptr) copy->setEmptyDrawConsumer(candidate.node, candidate.submesh);
+        if (copy != nullptr) {
+            copy->setEmptyDrawConsumer(
+                candidate.node, candidate.submesh, candidate.instance_count);
+        }
     }
     // 读上一帧：LOAD 叠加，或有纹理本帧先读后写（_rt_MipMappedFrameBuffer 历史、动态模糊累积缓冲、排在后面的链接图层）
     if (reads_previous_frame)

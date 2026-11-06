@@ -561,11 +561,6 @@ auto BuildMaterial(fs::VFS& vfs, ShaderCache& shader_cache,
     return Ok(rstd::move(build));
 }
 
-bool IsLayerCompositeShader(std::string_view shader) {
-    return shader == "genericimage" || shader == "genericimage2" || shader == "genericimage3" ||
-           shader == "genericimage4" || shader == "passthrough";
-}
-
 std::string ResolveShaderMaterialKey(const ShaderInfo& info, std::string_view material_key) {
     if (auto it = info.alias.find(material_key); it != info.alias.end()) return it->second;
 

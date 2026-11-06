@@ -40,10 +40,11 @@ bool EmptySnapshotConsumer(owe::SceneNode* node, u32 submesh_index) {
     return true;
 }
 
-VkRect2D SnapshotConsumerBounds(owe::SceneNode* node, u32 submesh_index, VkExtent2D extent) {
+VkRect2D SnapshotConsumerBounds(owe::SceneNode* node, u32 submesh_index, u32 instance_count,
+                                VkExtent2D extent) {
     const VkRect2D full_rect { .offset = { 0, 0 }, .extent = extent };
-    if (extent.width == 0 || extent.height == 0 || node == nullptr || ! node->HasLastPrimaryMvp() ||
-        node->Mesh() == nullptr) {
+    if (extent.width == 0 || extent.height == 0 || instance_count > u32(1) || node == nullptr ||
+        ! node->HasLastPrimaryMvp() || node->Mesh() == nullptr) {
         return full_rect;
     }
     const auto& mesh = *node->Mesh();
@@ -53,12 +54,14 @@ VkRect2D SnapshotConsumerBounds(owe::SceneNode* node, u32 submesh_index, VkExten
 
     const auto& submesh  = mesh.Submeshes()[submesh_idx];
     const auto  mat_slot = submesh.material_slot.to_primitive();
-    if (mat_slot < mesh.MaterialSlots().size() && mesh.MaterialSlots()[mat_slot]) {
-        const auto& mat = *mesh.MaterialSlots()[mat_slot];
-        if (mat.customShader.variant.is_some() &&
-            mat.customShader.variant->geometry_shader_enabled) {
-            return full_rect;
-        }
+    if (mat_slot >= mesh.MaterialSlots().size() || ! mesh.MaterialSlots()[mat_slot]) {
+        return full_rect;
+    }
+    const auto& mat = *mesh.MaterialSlots()[mat_slot];
+    if (! owe::IsLayerCompositeShader(mat.name)) return full_rect;
+    if (mat.customShader.variant.is_some() &&
+        mat.customShader.variant->geometry_shader_enabled) {
+        return full_rect;
     }
 
     const owe::SceneVertexArray* pos_array         = nullptr;
@@ -338,6 +341,7 @@ void CopyPass::record(PassRecordContext& context) {
         const auto rect = SnapshotConsumerBounds(
             m_desc.empty_draw_consumer,
             m_desc.empty_draw_submesh,
+            m_desc.empty_draw_instance_count,
             VkExtent2D { src.extent.width, src.extent.height });
         if (rect.extent.width == 0 || rect.extent.height == 0) {
             m_desc.after_barriers.Record(cmd);
