@@ -563,9 +563,15 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
                 if (output_rt.is_none()) return;
                 const auto& output_target = **output_rt;
                 const auto* pass_material = material_override ? material_override.get() : material;
-                const bool  reuses_previous_output =
+                const bool  full_transient_effect_overwrite =
+                    effect_node != nullptr && node->Camera() == "effect" && ! preserve_output &&
+                    ! LoadsPreviousAttachment(pass_material->blenmode) &&
+                    extra.transient_texture_families.contains(as_str(pass_output_s).unwrap());
+                const bool preserve_target_on_write =
+                    output_target.preserve_on_write && ! full_transient_effect_overwrite;
+                const bool reuses_previous_output =
                     ! (output_target.force_clear && ! preserve_output) &&
-                    (output_target.preserve_on_write || preserve_output ||
+                    (preserve_target_on_write || preserve_output ||
                      LoadsPreviousAttachment(pass_material->blenmode));
 
                 pdesc.output = pass_output_s;
@@ -611,7 +617,7 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
                     LoadsPreviousAttachment(pass_material->blenmode))
                     extra.reads_previous_frame = true;
                 pdesc.preserve_output = output_state->version > usize() &&
-                                        (output_target.preserve_on_write || preserve_output);
+                                        (preserve_target_on_write || preserve_output);
                 const bool uses_depth =
                     output_target.withDepth && vulkan::UsesDepthAttachment(*pass_material);
                 pdesc.has_depth_attachment = uses_depth;

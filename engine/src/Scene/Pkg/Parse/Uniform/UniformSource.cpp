@@ -827,8 +827,9 @@ auto TransformUniformSource::Evaluate(const UniformUpdateContext* context,
         }
         if (req_am) writer.Write(Output::AlternateModel, ShaderValue::fromMatrix(model));
         if (req_mi) writer.Write(Output::ModelInverse, ShaderValue::fromMatrix(model.inverse()));
-        if (req_mvp || req_mvpi) {
+        if (req_mvp || req_mvpi || (req_m && req_vp)) {
             const Matrix4d mvp = view_projection * model;
+            if (render_view == SceneRenderViewKind::Primary) node.SetLastPrimaryMvp(mvp);
             if (req_mvp) writer.Write(Output::ModelViewProjection, ShaderValue::fromMatrix(mvp));
             if (req_mvpi)
                 writer.Write(Output::ModelViewProjectionInverse,
