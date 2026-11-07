@@ -9,6 +9,7 @@ WPE Baker turns repeating animation in Wallpaper Engine scenes into seamless vid
 - Text layer effects no longer copy onto themselves.
 - Static rendering results are reused across frames (adding about 100–130 MB of VRAM on affected scenes).
 - The script runtime uses profile-guided optimization and a dedicated allocator; link-time optimization also covers the engine. Author scripts and callbacks keep their original behavior and floating-point precision.
+- Fixed `compare` reaching no verdict on current Wallpaper Engine builds: when the official query returns nothing, it now decides from power, displayed frames and the wallpaper assignment record.
 - Portable and source packages include the updated renderer, complete dependency sources and licenses, the optimization profile and matching native build records.
 
 ## Measured rendering throughput

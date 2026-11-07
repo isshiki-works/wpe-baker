@@ -49,7 +49,8 @@ internal sealed class WpeControl(string executable,
     // Only the selected file and WPE's known removal of local=true belong to this comparison.
     internal static bool ConfigMatchesSelection(JsonObject before, JsonObject current, string profile)
     {
-        JsonObject expected = before.DeepClone().AsObject();
+        JsonObject expected = Monitor0Only(before, profile);
+        current = Monitor0Only(current, profile);
         JsonObject oldAssignment = Assignment(expected, profile), currentAssignment = Assignment(current, profile);
         oldAssignment["file"] = currentAssignment["file"]!.DeepClone();
         if (oldAssignment["local"] is JsonValue local && local.TryGetValue<bool>(out bool enabled) && enabled && currentAssignment["local"] is null)
@@ -57,20 +58,31 @@ internal sealed class WpeControl(string executable,
         return JsonNode.DeepEquals(expected, current);
     }
 
+    // 比较只支持单屏，其余 Monitor 项和多屏布局都是已断开屏幕的残留；WPE 打开壁纸时会清掉它们。
+    private static JsonObject Monitor0Only(JsonObject config, string profile)
+    {
+        JsonObject copy = config.DeepClone().AsObject();
+        JsonObject wallpapers = copy[profile]!["general"]!["wallpaperconfig"]!.AsObject();
+        wallpapers.Remove("layout");
+        wallpapers.Remove("profile");
+        JsonObject selected = wallpapers["selectedwallpapers"]!.AsObject();
+        foreach (string key in selected.Select(item => item.Key).Where(key => key != "Monitor0").ToArray()) selected.Remove(key);
+        return copy;
+    }
+
     internal static bool OnlyLocalFlagRemoved(JsonObject before, JsonObject current, string profile)
     {
-        JsonObject expected = before.DeepClone().AsObject();
+        JsonObject expected = Monitor0Only(before, profile);
         JsonObject assignment = Assignment(expected, profile);
-        if (assignment["local"] is not JsonValue local || !local.TryGetValue<bool>(out bool enabled) || !enabled) return false;
-        assignment.Remove("local");
-        return JsonNode.DeepEquals(expected, current);
+        if (assignment["local"] is JsonValue local && local.TryGetValue<bool>(out bool enabled) && enabled) assignment.Remove("local");
+        return JsonNode.DeepEquals(expected, Monitor0Only(current, profile));
     }
 
     internal static bool OnlyMonitorRemoved(JsonObject before, JsonObject current, string profile)
     {
-        JsonObject expected = before.DeepClone().AsObject();
+        JsonObject expected = Monitor0Only(before, profile);
         expected[profile]!["general"]!["wallpaperconfig"]!["selectedwallpapers"]!.AsObject().Remove("Monitor0");
-        return JsonNode.DeepEquals(expected, current);
+        return JsonNode.DeepEquals(expected, Monitor0Only(current, profile));
     }
 
     internal (int Pid, long StartTicks) Identity()

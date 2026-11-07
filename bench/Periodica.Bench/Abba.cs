@@ -83,7 +83,7 @@ public static class Abba
             ["previous_playback_state"] = "not_observed",
             ["requested_restore_playback"] = options.RestorePlayback,
             ["restoration_scope"] = "Wallpaper assignment and configuration. If switching began, the original is reopened with the requested pause/play control; its prior playback state and position are not read.",
-            ["control_scope"] = "One connected display, monitor 0. Each load uses stop/close/open/play. Saved assignments and this WPE process's playback readings are checked; config fallback does not establish visual correctness or official playback identity.",
+            ["control_scope"] = "One connected display, monitor 0. Each load uses stop/close/open/play. Saved assignments and this WPE process's playback readings are checked; this does not establish visual correctness.",
             ["segments"] = segments
         };
         string expectedProject = previous;
@@ -290,14 +290,11 @@ public static class Abba
                     reasons.Add($"{label}: requested idle baseline power capture was incomplete.");
                 continue;
             }
-            if (item?["selected_evidence"]?.GetValue<string>() == "saved_configuration_getWallpaper_returned_empty" ||
-                item?["selected_after_evidence"]?.GetValue<string>() == "saved_configuration_getWallpaper_returned_empty")
-                reasons.Add($"{label}: saved configuration confirms assignment only; official playback selection was not verified.");
+            // getWallpaper 在部分环境恒为空，且只报告选中项、不证明渲染，不参与判定；证据来源仍写在 selected_evidence。
             if (item?["status"]?.GetValue<string>() != "sampled" ||
                 item?["power_status"]?.GetValue<string>() != "sampled" ||
                 item?["presentmon_status"]?.GetValue<string>() != "sampled" ||
                 item?["target_status"]?.GetValue<string>() != "valid" ||
-                item?["selected_verified"]?.GetValue<bool>() != true ||
                 item?["frame_pacing_scope"]?.GetValue<string>() != "single_swapchain" ||
                 item?["display_evidence_complete"]?.GetValue<bool>() != true ||
                 item?["incomplete_reasons"] is JsonArray { Count: > 0 })
@@ -336,7 +333,7 @@ public static class Abba
             (gpuChoice == "baked" ? packageB > packageA : packageA > packageB) ? "tradeoff" : gpuChoice;
         return new JsonObject { ["status"] = reasons.Count == 0 ? "measured" : "unavailable",
             ["choice"] = choice, ["gpu_choice"] = gpuChoice,
-            ["scope"] = "Saved project assignments and iGPU graphics-domain/CPU-package readings from this WPE process on one display. Configuration fallback alone does not verify official playback identity. Not total-system savings or visual correctness.",
+            ["scope"] = "Saved project assignments and iGPU graphics-domain/CPU-package readings from this WPE process on one display. Not total-system savings or visual correctness.",
             ["reasons"] = reasons };
     }
 

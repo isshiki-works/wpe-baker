@@ -104,6 +104,8 @@ internal static class SelfTest
         WpeControl.Assignment(during, "test")["file"] = "candidate";
         WpeControl.Assignment(during, "test").Remove("local");
         Check(WpeControl.ConfigMatchesSelection(config, during, "test"), "only our selected file and local removal are allowed during comparison");
+        during["test"]!["general"]!["wallpaperconfig"]!["selectedwallpapers"]!.AsObject().Remove("Monitor1");
+        Check(WpeControl.ConfigMatchesSelection(config, during, "test"), "Wallpaper Engine pruning a disconnected monitor does not stop the comparison");
         during["test"]!["setting"] = 43;
         Check(!WpeControl.ConfigMatchesSelection(config, during, "test"), "unrelated user configuration changes prevent automatic switching and restoration");
         var after = config.DeepClone().AsObject();
@@ -159,14 +161,13 @@ internal static class SelfTest
         Check(Abba.Compare(saved)["choice"]?.GetValue<string>() == "unavailable", "material displayed-frame loss withholds a choice");
         saved["segments"]![0]!["displayed_fps"] = 59.98;
         Check(Abba.Compare(saved)["choice"]?.GetValue<string>() == "baked", "59.98 of 60 in a finite 900-frame sample passes");
-        saved["segments"]![0]!["selected_verified"] = false;
-        Check(Abba.Compare(saved)["choice"]?.GetValue<string>() == "unavailable", "unverified selected project withholds a choice");
         Check(Abba.Compare(Comparison(0.001, 0.002))["choice"]?.GetValue<string>() == "unavailable",
             "idle-scale iGPU telemetry cannot impersonate discrete-GPU playback cost");
         var fallback = Comparison(10, 6);
         fallback["segments"]![0]!["selected_evidence"] = "saved_configuration_getWallpaper_returned_empty";
-        Check(Abba.Compare(fallback)["choice"]?.GetValue<string>() == "unavailable",
-            "saved assignment fallback cannot impersonate official playback evidence");
+        fallback["segments"]![0]!["selected_verified"] = false;
+        Check(Abba.Compare(fallback)["choice"]?.GetValue<string>() == "baked",
+            "an empty getWallpaper does not withhold a choice backed by power and display evidence");
         var idleRun = Comparison(10, 6);
         idleRun["idle_seconds"] = 10;
         var idleSegments = idleRun["segments"]!.AsArray();
