@@ -303,10 +303,13 @@ Job ReadJob(const owe::NJson& json, const fs::path& base) {
         options.codec = String(*encode, "codec", "h264_vulkan");
         options.packed_alpha = Bool(*encode, "packed_alpha", false);
         auto qp = Uint(*encode, "qp", 18);
+        const auto mf_quality = Uint(*encode, "mf_quality", 80);
         if (qp > 51 || job.sample_width || job.raw_stdout || job.output_stride != 1 || job.output_phase ||
-            (options.codec != "h264_vulkan" && options.codec != "hevc_vulkan" && options.codec != "av1_nvenc"))
-            throw std::runtime_error("GPU encoding requires full frames, Vulkan H.264/HEVC or NVENC AV1 and QP 0..51");
+            mf_quality > 100 || (options.codec != "h264_vulkan" && options.codec != "hevc_vulkan" &&
+            options.codec != "av1_nvenc" && options.codec != "h264_mf" && options.codec != "hevc_mf"))
+            throw std::runtime_error("GPU encoding requires full frames, a supported GPU codec, QP 0..51 and MF quality 0..100");
         options.qp = static_cast<int>(qp);
+        options.mf_quality = static_cast<int>(mf_quality);
         options.fps_num = job.fps_num; options.fps_den = job.fps_den;
         options.first_frame = job.warmup; options.frames = job.frames;
         options.encoded_frames = Uint(*encode, "encoded_frames", job.frames);
@@ -724,6 +727,12 @@ int Render(const fs::path& job_path) {
         info.sampling_coverage_sampled_only=job.sampling_coverage_sampled_only;
         info.gpu_encode = job.gpu_encode;
         info.gpu_readback = job.gpu_readback;
+        const char* borrowed_raw = std::getenv("WPE_BORROWED_RAW");
+        // Consume eligible maps directly; WPE_BORROWED_RAW=0 retains the vector fallback.
+        const bool borrow_pixels = !(borrowed_raw && std::string_view(borrowed_raw) == "0") &&
+            !job.sample_width && !job.sample_height && !job.gpu_encode && !job.gpu_readback &&
+            !job.collect_sampling_coverage;
+        info.borrow_cpu_readback = borrow_pixels;
         owe::OfflineOptions offline;
         offline.seed = job.seed;
         offline.epoch_ms = job.epoch_ms;
@@ -753,7 +762,7 @@ int Render(const fs::path& job_path) {
         }
         // 像素交给写线程，写本帧的同时渲染下一帧；WPE_SERIAL_FRAMES=1 时回到同步写（与渲染器的回退开关同一个）。
         const char* serial_frames = std::getenv("WPE_SERIAL_FRAMES");
-        FrameWriter writer([&](const std::vector<uint8_t>& frame_pixels) {
+        FrameWriter writer([&](std::span<const uint8_t> frame_pixels) {
             if (job.raw_stdout) {
                 if (std::fwrite(frame_pixels.data(), 1, frame_pixels.size(), stdout) != frame_pixels.size())
                     throw std::runtime_error("frame consumer closed or failed");
@@ -763,6 +772,7 @@ int Render(const fs::path& job_path) {
             }
         }, !(serial_frames && *serial_frames && std::string_view(serial_frames) != "0"));
         std::vector<uint8_t> spare_pixels;
+        owe::BorrowedCpuReadback spare_borrowed;
         const double dt = static_cast<double>(job.fps_den) / job.fps_num;
         uint64_t next_audio_sample = 0;
         std::size_t next_input_event = 0;
@@ -780,7 +790,7 @@ int Render(const fs::path& job_path) {
             if (wallpaper.stepStatus() != owe::OfflineStepStatus::Drawn ||
                 (!pixels.completed() && !(!read_pixels && frame + 1 < job.warmup + job.frames && pixels.submitted())) || pixels.frame_index != frame || pixels.width != output_width ||
                 pixels.height != output_height || pixels.row_pitch != output_width * 4 ||
-                pixels.pixels.size() != (read_pixels ? uint64_t(output_width) * output_height * 4 : 0)) {
+                pixels.pixelBytes().size() != (read_pixels ? uint64_t(output_width) * output_height * 4 : 0)) {
                 throw std::runtime_error("completed frame violates shape/index contract");
             }
             const auto& pcm = wallpaper.audioReadback();
@@ -796,7 +806,7 @@ int Render(const fs::path& job_path) {
             ++simulated_frames;
             gpu_sampled = gpu_sampled || pixels.gpu_sampled;
             if (pixels.rasterized) ++drawn_frames;
-            if (!pixels.pixels.empty()) ++readback_frames;
+            if (!pixels.pixelBytes().empty()) ++readback_frames;
             if (frame < job.warmup) continue;
             if (job.write_audio) {
                 audio.write(reinterpret_cast<const char*>(pcm.samples.data()), static_cast<std::streamsize>(pcm.samples.size() * sizeof(float)));
@@ -806,8 +816,15 @@ int Render(const fs::path& job_path) {
             if (!read_pixels && !job.gpu_encode) continue;
             // GPU 直编不读回（像素为空），不写。换出的缓冲在下一帧 step 时回收给读回复用。
             if (read_pixels) {
-                wallpaper.exchangePixels(spare_pixels);
-                writer.push(spare_pixels);
+                if (borrow_pixels) {
+                    wallpaper.exchangeBorrowedPixels(spare_borrowed);
+                    writer.pushBorrowed(spare_borrowed);
+                    if (spare_borrowed.serial && !wallpaper.releaseBorrowedPixels(spare_borrowed))
+                        throw std::runtime_error("release borrowed CPU frame failed");
+                } else {
+                    wallpaper.exchangePixels(spare_pixels);
+                    writer.push(spare_pixels);
+                }
             }
             index << "{\"frame\":" << (frame - job.warmup) << ",\"simulation_frame\":" << frame
                   << ",\"pts_num\":" << (frame - job.warmup) * job.fps_den << ",\"pts_den\":" << job.fps_num
@@ -822,6 +839,9 @@ int Render(const fs::path& job_path) {
                   << ",\"cpu_scene_ms\":" << OptionalReal(pixels.cpu_scene_ms)
                   << ",\"cpu_script_ms\":" << OptionalReal(pixels.cpu_script_ms)
                   << ",\"cpu_resources_ms\":" << OptionalReal(pixels.cpu_resources_ms)
+                  << ",\"cpu_rt_refresh_ms\":" << OptionalReal(pixels.cpu_rt_refresh_ms)
+                  << ",\"cpu_mesh_refresh_ms\":" << OptionalReal(pixels.cpu_mesh_refresh_ms)
+                  << ",\"cpu_material_refresh_ms\":" << OptionalReal(pixels.cpu_material_refresh_ms)
                   << ",\"cpu_pending_wait_ms\":" << OptionalReal(pixels.cpu_pending_wait_ms)
                   << ",\"render_ms\":" << std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-frame_start).count()
                   << "}\n";
@@ -830,7 +850,11 @@ int Render(const fs::path& job_path) {
             if (written == 1 || written % 120 == 0 || written == job.frames)
                 std::cerr << "wpe-render: " << written << '/' << job.frames << " frames\n";
         }
-        writer.finish();
+        if (borrow_pixels) {
+            writer.finishBorrowed(spare_borrowed);
+            if (spare_borrowed.serial && !wallpaper.releaseBorrowedPixels(spare_borrowed))
+                throw std::runtime_error("release final borrowed CPU frame failed");
+        } else writer.finish();
         if (audio_processed != AudioBoundary(job.warmup + job.frames, job.fps_num, job.fps_den) -
                              AudioBoundary(job.warmup, job.fps_num, job.fps_den))
             throw std::runtime_error("final audio duration does not match video timeline");
@@ -885,7 +909,7 @@ int main(int argc, char** argv) {
         }
         if (parsed && version && !render->parsed()) {
             std::cout << "wpe-render 0.1-dev upstream=" << kBase << " source=" << WPE_RENDER_SOURCE_DIGEST
-                      << " features=sparse-readback-v1,gpu-resize-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-encode-padding-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,gpu-sampled-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,gpu-quality-samples-v1,hdr-terminal-affine-v2,hdr-terminal-signed-sqrt-v1,hdr-range-probe-v1\n";
+                      << " features=sparse-readback-v1,gpu-resize-readback-v1,gpu-samples-v1,gpu-encode-v1,gpu-encode-resize-v1,gpu-encode-padding-v1,gpu-capture-v1,capture-force-visible-owner-v1,gpu-loop-encode-v1,gpu-sampling-coverage-v1,gpu-sampled-coverage-v1,effect-render-scale-v1,adaptive-effect-resolution-v1,gpu-quality-samples-v1,hdr-terminal-affine-v2,hdr-terminal-signed-sqrt-v1,hdr-range-probe-v1,gpu-mf-encode-v1\n";
             return 0;
         }
         if (parsed && !version && render->parsed()) return Render(Path(job));

@@ -520,7 +520,11 @@ void ParseModelObjImpl(SceneParseContext& context, wpscene::ModelObject& model_o
         mesh->Submeshes().emplace_back();
         auto& submesh = mesh->Submeshes().back();
         MdlParser::GenMeshFromMdl(
-            submesh, mdl_mesh, { texcoord_scale[usize()], texcoord_scale[usize(1)] });
+            submesh, mdl_mesh, { texcoord_scale[usize()], texcoord_scale[usize(1)] }, {}, true);
+        if (! mdl.morph_sections.is_empty()) {
+            submesh.position_only_vertex = None();
+            while (submesh.index_arrays.size() > 1) submesh.index_arrays.pop_back();
+        }
         submesh.material_slot = material_slot;
     }
 

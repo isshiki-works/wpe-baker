@@ -1,11 +1,14 @@
 #include <vulkan/vulkan_core.h>
 
 #include <cstring>
+#include <bit>
+#include <limits>
 
 #include <gtest/gtest.h>
 
 import rstd;
 import rstd.cppstd;
+import eigen;
 import wescene.scene;
 import wescene.types;
 import wescene.vulkan;
@@ -253,6 +256,45 @@ TEST(UniformBufferLayout, RejectsMemberOutsideBlock) {
     };
 
     EXPECT_TRUE(owe::vulkan::CompileUniformBufferLayout(block).is_err());
+}
+
+TEST(UniformBufferSerializer, DoubleMatrixConversionPreservesLayoutAndFloatBits) {
+    auto expect_conversion = [](const Eigen::Ref<const Eigen::MatrixXd>& matrix) {
+        const Eigen::MatrixXf legacy = matrix.cast<float>();
+        const auto value = owe::UniformValue::fromMatrix(matrix);
+        EXPECT_EQ(value.size(), rstd::usize(matrix.size()));
+        EXPECT_EQ(value.View().layout,
+                  owe::UniformValueLayout::Matrix(
+                      rstd::u32(static_cast<uint32_t>(matrix.rows())),
+                      rstd::u32(static_cast<uint32_t>(matrix.cols())),
+                      rstd::usize(1),
+                      owe::UniformMatrixStorage::ColumnMajor));
+        for (Eigen::Index index = 0; index < matrix.size(); ++index) {
+            EXPECT_EQ(std::bit_cast<uint32_t>(value[rstd::usize(index)]),
+                      std::bit_cast<uint32_t>(legacy.data()[index]));
+        }
+    };
+
+    Eigen::MatrixXd matrix(4, 4);
+    matrix << -0.0, 1.0 + 0x1p-24, 1.0 + 0x1.8p-24, 0x1p-149,
+              std::numeric_limits<double>::quiet_NaN(),
+              std::numeric_limits<double>::infinity(),
+              -std::numeric_limits<double>::infinity(), 7.0,
+              8.0, 9.0, 10.0, 11.0,
+              12.0, 13.0, 14.0, 15.0;
+    expect_conversion(matrix);
+    // The block retains the 4-row outer stride instead of becoming packed 3x3.
+    expect_conversion(matrix.block(0, 0, 3, 3));
+
+    Eigen::Matrix<double, 2, 3, Eigen::RowMajor> row_major;
+    row_major << 1.0, 2.0, 3.0, 4.0, 5.0, 6.0;
+    expect_conversion(row_major);
+
+    Eigen::MatrixXd large(5, 5);
+    for (Eigen::Index column = 0; column < large.cols(); ++column)
+        for (Eigen::Index row = 0; row < large.rows(); ++row)
+            large(row, column) = double(column * 5 + row) + 0.25;
+    expect_conversion(large);
 }
 
 TEST(UniformBufferSerializer, PacksColumnVectorMatrixUsingReflectedStride) {
@@ -717,7 +759,8 @@ TEST(UniformBufferBinding, OrdersSourcesAndSkipsUnchangedVersions) {
     ++low_state->version;
     ASSERT_TRUE(update->Update(frame, writer_trait).is_ok());
 
-    EXPECT_EQ(writer.update_count, rstd::u64(2));
+    // The higher-priority source still produces the same bytes.
+    EXPECT_EQ(writer.update_count, rstd::u64(1));
     ASSERT_EQ(writer.bytes.size(), 4u);
     float value = 0.0f;
     std::memcpy(&value, writer.bytes.data(), writer.bytes.size());
@@ -1186,6 +1229,15 @@ TEST(TextureRequest, BuildsRenderTargetCacheKey) {
     auto no_mip = owe::vulkan::MakeRenderTargetNoMipTextureRequest("_rt_default", rt);
     ASSERT_TRUE(no_mip.definition.is_some());
     EXPECT_EQ(no_mip.definition->mip_levels, rstd::u32(1));
+
+    const auto first_clear = owe::resource::TextureContentFlag(
+        owe::resource::TextureContent::ClearOnFirstWrite);
+    EXPECT_EQ(request.content & first_clear, rstd::u32());
+    rt.force_clear = true;
+    EXPECT_NE(owe::vulkan::MakeRenderTargetTextureRequest("_rt_default", rt).content & first_clear,
+              rstd::u32());
+    EXPECT_NE(owe::vulkan::MakeRenderTargetNoMipTextureRequest("_rt_default", rt).content & first_clear,
+              rstd::u32());
 }
 
 TEST(RenderTargetPhysicalExtent, ScalesOnlyOptedInImageEffects) {
@@ -1752,6 +1804,17 @@ TEST(PipelineLayoutPlanner, SplitsCompatibleSupersetsAtDeviceLimits) {
     auto plan = rstd::move(planned).unwrap_unchecked();
     EXPECT_EQ(plan.families.len(), rstd::usize(2));
     EXPECT_EQ(plan.conflicts.len(), rstd::usize(1));
+}
+
+TEST(PipelineCacheDiagnostics, ShaderWordsKeepCanonicalByteEncoding) {
+    owe::vulkan::PipelineKeyWriter writer;
+    const unsigned int words[] { 0u, 0x01020304u, 0xffffffffu };
+    writer.writeU32Values(words);
+    writer.writeU32Values({});
+    EXPECT_EQ(std::move(writer).finish().bytes,
+              Bytes({ 1u, 0u, 0u, 0u, 0u,
+                      1u, 4u, 3u, 2u, 1u,
+                      1u, 255u, 255u, 255u, 255u }));
 }
 
 TEST(PipelineCacheDiagnostics, RecordsStableKeys) {

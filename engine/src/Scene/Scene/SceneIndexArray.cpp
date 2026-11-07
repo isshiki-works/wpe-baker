@@ -1,5 +1,7 @@
 module;
 
+#include <cstring>
+
 module wescene.scene;
 import rstd;
 import rstd.cppstd;
@@ -7,13 +9,17 @@ import rstd.cppstd;
 using namespace rstd::prelude;
 using namespace owe;
 
-SceneIndexArray::SceneIndexArray(usize index_count)
-    : m_data(Vec<rstd::uint32_t>::with_capacity(index_count)) {
-    for (usize i {}; i < index_count; ++i) m_data.push(0);
+SceneIndexArray::SceneIndexArray(usize index_count) {
+    m_data.resize(index_count, 0u);
 }
 SceneIndexArray::SceneIndexArray(slice<rstd::uint32_t> data)
-    : m_data(Vec<rstd::uint32_t>::with_capacity(data.len())), m_size(data.len()) {
-    for (rstd::uint32_t value : data) m_data.push(rstd::move(value));
+    : m_size(data.len()) {
+    m_data.resize(data.len(), 0u);
+    if (! data.is_empty()) {
+        std::memcpy(m_data.begin(),
+                    data.as_raw_ptr(),
+                    data.len().to_primitive() * sizeof(rstd::uint32_t));
+    }
 }
 
 SceneIndexArray::SceneIndexArray(SceneIndexArray&& other) noexcept

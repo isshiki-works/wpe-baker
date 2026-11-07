@@ -914,6 +914,7 @@ struct TextLayouter::Impl {
     std::string current_text;
     bool        missing_glyph_logged { false };
     bool        truncate_logged { false };
+    bool        mesh_initialized { false };
 
     // Scratch buffers reused across SetText calls — avoids reallocs for
     // every script tick. Sized at construction to peak capacity.
@@ -1108,13 +1109,6 @@ void TextLayouter::SetText(std::string_view utf8) {
     im.last_source_center_x = 0.0f;
     im.last_source_center_y = 0.0f;
 
-    // Zero the unused tail so stale data from the previous (longer) text
-    // doesn't show up. Cheaper than tracking exact quad count downstream.
-    std::fill(im.positions.begin(), im.positions.end(), 0.0f);
-    std::fill(im.texcoords.begin(), im.texcoords.end(), 0.0f);
-    std::fill(im.colors.begin(), im.colors.end(), 0.0f);
-    std::fill(im.indices.begin(), im.indices.end(), 0u);
-
     auto write_quad = [&](std::size_t                 q_idx,
                           float                       left,
                           float                       right,
@@ -1268,24 +1262,28 @@ void TextLayouter::SetText(std::string_view utf8) {
 
     // Push into the mesh. Vertex array's stride is interleaved with padding
     // already laid out by SceneVertexArray; SetVertex scatters by name.
+    // Initialise the full reserved capacity once so dynamic GPU buffers can
+    // accommodate growth. Later writes only touch the live prefix; the index
+    // draw count below excludes stale quads when the text shrinks.
+    const std::size_t copied_quads = im.mesh_initialized ? q : im.peak_quads;
     auto& v = im.mesh->GetVertexArray(rstd::usize());
     v.SetVertex(
         rstd::cppstd::as_string_view(WE_IN_POSITION),
-        rstd::slice<float>::from_raw_parts(im.positions.data(), rstd::usize(im.positions.size())));
+        rstd::slice<float>::from_raw_parts(im.positions.data(), rstd::usize(copied_quads * 12)));
     v.SetVertex(
         rstd::cppstd::as_string_view(WE_IN_TEXCOORD),
-        rstd::slice<float>::from_raw_parts(im.texcoords.data(), rstd::usize(im.texcoords.size())));
+        rstd::slice<float>::from_raw_parts(im.texcoords.data(), rstd::usize(copied_quads * 8)));
     v.SetVertex(
         rstd::cppstd::as_string_view(WE_IN_COLOR),
-        rstd::slice<float>::from_raw_parts(im.colors.data(), rstd::usize(im.colors.size())));
+        rstd::slice<float>::from_raw_parts(im.colors.data(), rstd::usize(copied_quads * 16)));
 
     auto& idx = im.mesh->GetIndexArray(rstd::usize());
     idx.Assign(rstd::usize(),
                rstd::slice<rstd::uint32_t>::from_raw_parts(im.indices.data(),
-                                                           rstd::usize(im.indices.size())));
-    // Render only the indices we actually populated (rest are zeroed out
-    // and reference vertex 0, which is harmless but wastes draw calls).
+                                                           rstd::usize(copied_quads * 6)));
+    // Render only the indices populated for the current text.
     idx.SetRenderDataCount(rstd::usize(q * 6));
+    im.mesh_initialized = true;
 
     im.mesh->SetDirty();
 }

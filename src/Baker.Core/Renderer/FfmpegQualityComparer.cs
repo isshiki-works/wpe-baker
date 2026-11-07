@@ -109,10 +109,17 @@ internal sealed partial class FfmpegQualityComparer(FfmpegTool ff)
             }
             return;
         }
-        // P1a：一个进程顺序软解到最后一个抽样帧，select 按帧号放行，不限线程（解码器默认按核数开帧线程）。
+        // AV1 GPU products use 8-bit NV12. Select on D3D11 surfaces before downloading,
+        // so non-sampled frames stay on the GPU; the selected YUV bytes are unchanged.
+        bool hardwareAv1 = FfmpegTool.IsAv1(request.Product);
+        string[] input = hardwareAv1
+            ? ["-hwaccel", "d3d11va", "-hwaccel_output_format", "d3d11", "-i", request.Product]
+            : FfmpegTool.Input(request.Product);
+        string filter = Select(request.Samples) + (hardwareAv1 ? ",hwdownload,format=nv12" : "");
+        // One decoder still advances through every frame and selects the exact same indices.
         // 直接写文件而不经 stdout：.NET 读子进程管道只有约 60 MB/s，8K 的 9 帧 yuv 有 448 MB。
         await ff.RunTextAsync(ff.Tools.Ffmpeg,
-            ["-hide_banner", "-nostdin", "-v", "error", .. FfmpegTool.Input(request.Product), "-map", "0:v:0", "-vf", Select(request.Samples),
+            ["-hide_banner", "-nostdin", "-v", "error", .. input, "-map", "0:v:0", "-vf", filter,
              "-fps_mode", "passthrough", "-frames:v", request.Samples.Count.ToString(CultureInfo.InvariantCulture),
              "-an", "-sn", "-dn", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-n", productPath],
             Path.Combine(request.WorkDirectory, request.Stem + "-decode.stderr.log"), token);

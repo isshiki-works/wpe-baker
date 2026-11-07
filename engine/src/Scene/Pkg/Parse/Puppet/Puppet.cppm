@@ -110,6 +110,8 @@ public:
         uint32_t       bone_index { 0 };
         int32_t        unk { 0 }; // hexpat BoneTrack.unk
         Vec<BoneFrame> frames;
+        // Computed by Puppet::prepared(); parsed frame data stays immutable during playback.
+        bool has_authored_frames { false };
     };
 
     // MDLA >= 3 animation payload. Scalar main/tail tracks contain the texture-channel
@@ -251,6 +253,7 @@ public:
         // Preserve the authored animationlayers[].visible object so the scene
         // parser can wire its script to this exact puppet animation layer.
         Option<NJson> visible_binding;
+        Option<NJson> blend_binding;
         bool         visible_can_change { false };
 
         // Schema-only absorption (renderer reads only id/rate/blend/visible).

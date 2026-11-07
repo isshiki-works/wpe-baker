@@ -73,7 +73,8 @@ internal sealed record RenderJob
 /// <summary>job.gpu_encode：同卡编码参数。字段全部写出（crop 缺省为整幅），resize_* 只在请求了编码尺寸时写。</summary>
 internal sealed record RenderGpuEncodeJob(string Codec, int Qp, bool PackedAlpha, ulong EncodedFrames, bool CollectBounds,
     bool BoundsIncludeRgb, ulong[] RetainFrames, uint CrossfadeFrames, bool RetainLoopWindow, int CropX, int CropY,
-    int CropWidth, int CropHeight, uint? ResizeWidth, uint? ResizeHeight, uint? PadWidth, uint? PadHeight);
+    int CropWidth, int CropHeight, uint? ResizeWidth, uint? ResizeHeight, uint? PadWidth, uint? PadHeight,
+    int? MfQuality = null);
 
 /// <summary>
 /// wpe-render 的 result.json（schema 1）里本仓库实际读取的字段。没列出的字段反序列化时忽略、不报错；

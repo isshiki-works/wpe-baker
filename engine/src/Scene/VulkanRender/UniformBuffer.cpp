@@ -1,4 +1,5 @@
 module;
+#include <cstring>
 #include <new>
 
 #include <rstd/macro.hpp>
@@ -15,6 +16,15 @@ using namespace rstd::literals;
 
 namespace owe::vulkan
 {
+
+namespace
+{
+// 全局递增：缓冲重建后新对象的序号也不会与旧值撞上。
+u64 NextUniformUploadSerial() {
+    static rstd::uint64_t serial = 0;
+    return u64(++serial);
+}
+} // namespace
 
 auto ProgramUniformFrameContext::TextureFrame(SceneDrawItemId draw, usize texture_index) const
     -> Option<SceneTextureFrameView> {
@@ -303,9 +313,7 @@ namespace
 bool WriteFloat(mut_ref<u8[]> destination, usize offset, float value) {
     if (offset > destination.len() || usize(sizeof(float)) > destination.len() - offset)
         return false;
-    auto bytes =
-        slice<u8>::from_raw_parts(reinterpret_cast<const byte*>(&value), usize(sizeof(float)));
-    for (usize index {}; index < bytes.len(); ++index) destination[offset + index] = bytes[index];
+    std::memcpy(destination.as_raw_ptr() + offset.to_primitive(), &value, sizeof(float));
     return true;
 }
 
@@ -489,7 +497,10 @@ auto SerializeUniformValue(mut_ref<u8[]> destination, const UniformSlot& slot,
                 rstd::format("uniform {} value kind does not match reflection", slot.name.as_str()),
         });
     }
-    for (usize index {}; index < slot.size; ++index) destination[slot.offset + index] = u8();
+    if (slot.size > usize()) {
+        std::memset(
+            destination.as_raw_ptr() + slot.offset.to_primitive(), 0, slot.size.to_primitive());
+    }
     if (value_matrix) {
         return SerializeMatrixValue(destination, slot, value, convention, matrix_abi);
     }
@@ -552,21 +563,24 @@ UniformBufferBinding::UniformBufferBinding(
     SceneDrawItemId draw_item, resource::BufferUseHandle buffer, UniformBufferLayout layout,
     Vec<BoundUniformSource> sources, ShaderValues defaults, ref<SceneMaterial> material,
     Vec<PreparedUniformTextureMetadata> textures, SceneRenderViewKind render_view,
-    ShaderMatrixConvention matrix_convention, ShaderMatrixAbi matrix_abi)
+    ShaderMatrixConvention matrix_convention, ShaderMatrixAbi matrix_abi, bool disjoint_sources)
     : m_draw_item(draw_item),
       m_buffer(buffer),
       m_layout(rstd::move(layout)),
       m_sources(rstd::move(sources)),
       m_data(rstd::vec::Vec<u8>::with_capacity(m_layout.size)),
       m_base_data(rstd::vec::Vec<u8>::with_capacity(m_layout.size)),
+      m_uploaded_data(rstd::vec::Vec<u8>::with_capacity(m_layout.size)),
       m_defaults(rstd::move(defaults)),
       m_material(material),
       m_textures(rstd::move(textures)),
       m_render_view(render_view),
       m_matrix_convention(matrix_convention),
-      m_matrix_abi(matrix_abi) {
+      m_matrix_abi(matrix_abi),
+      m_disjoint_sources(disjoint_sources) {
     m_data.resize(m_layout.size, u8(0));
     m_base_data.resize(m_layout.size, u8(0));
+    m_uploaded_data.resize(m_layout.size, u8(0));
 }
 
 auto UniformBufferBinding::WriteSlot(usize slot_index, UniformValueView value) const
@@ -613,34 +627,73 @@ auto UniformBufferBinding::Update(const UniformBufferFrameContext*         frame
     detail::UpdateContext context_impl(frame_context->Frame(), resources, m_render_view);
     const UniformUpdateContext* context = &context_impl;
 
-    auto versions = Vec<u64>::with_capacity(m_sources.len());
+    m_versions.clear();
     bool changed  = force;
     for (auto& bound : m_sources) {
-        u64 version = bound.source->Version(context);
-        versions.push(rstd::move(version));
+        detail::SourceValueWriter writer_impl(*this, bound);
+        u64 version = bound.source->VersionFor(context, &writer_impl);
+        m_versions.push(rstd::move(version));
         changed = changed || ! bound.evaluated || bound.version != version;
     }
     if (! changed) return Ok(empty {});
 
-    rstd::slice_::copy_from_slice(m_data.as_mut_slice().as_mut_ref(), m_base_data.as_slice());
-    usize source_index {};
-    for (auto& bound : m_sources) {
-        detail::SourceValueWriter writer_impl(*this, bound);
-        UniformValueSink*         writer = &writer_impl;
-        auto evaluated = bound.source->Evaluate(context, writer);
-        if (evaluated.is_err()) {
-            return Err(UniformBufferUpdateError {
-                .message = rstd::move(evaluated).unwrap_err_unchecked().message,
-            });
+    if (force || ! m_disjoint_sources) {
+        rstd::slice_::copy_from_slice(m_data.as_mut_slice().as_mut_ref(), m_base_data.as_slice());
+        usize source_index {};
+        for (auto& bound : m_sources) {
+            detail::SourceValueWriter writer_impl(*this, bound);
+            UniformValueSink*         writer = &writer_impl;
+            auto evaluated = bound.source->Evaluate(context, writer);
+            if (evaluated.is_err()) {
+                return Err(UniformBufferUpdateError {
+                    .message = rstd::move(evaluated).unwrap_err_unchecked().message,
+                });
+            }
+            bound.version   = m_versions[source_index++];
+            bound.evaluated = true;
         }
-        bound.version   = versions[source_index++];
-        bound.evaluated = true;
+    } else {
+        usize source_index {};
+        for (auto& bound : m_sources) {
+            const u64 version = m_versions[source_index++];
+            if (bound.evaluated && bound.version == version) continue;
+            for (const auto& output : bound.outputs) {
+                if (output.slot_index >= m_layout.slots.len()) continue;
+                const auto& slot = m_layout.slots[output.slot_index];
+                if (slot.offset <= m_data.len() && slot.size <= m_data.len() - slot.offset) {
+                    std::memcpy(m_data.data() + slot.offset.to_primitive(),
+                                m_base_data.data() + slot.offset.to_primitive(),
+                                slot.size.to_primitive());
+                }
+            }
+            detail::SourceValueWriter writer_impl(*this, bound);
+            UniformValueSink*         writer = &writer_impl;
+            auto evaluated = bound.source->Evaluate(context, writer);
+            if (evaluated.is_err()) {
+                return Err(UniformBufferUpdateError {
+                    .message = rstd::move(evaluated).unwrap_err_unchecked().message,
+                });
+            }
+            bound.version   = version;
+            bound.evaluated = true;
+        }
     }
 
-    auto updated = buffers->UpdateBuffer(m_buffer, m_data.as_slice());
-    if (updated.is_err()) {
-        auto error = rstd::move(updated).unwrap_err_unchecked();
-        return Err(UniformBufferUpdateError { .message = rstd::move(error.message) });
+    const auto byte_len = m_data.len().to_primitive();
+    if (! m_uploaded || m_uploaded_data.len() != m_data.len() ||
+        (byte_len > 0 && std::memcmp(m_data.data(), m_uploaded_data.data(), byte_len) != 0)) {
+        auto updated = buffers->UpdateBuffer(m_buffer, m_data.as_slice());
+        if (updated.is_err()) {
+            auto error = rstd::move(updated).unwrap_err_unchecked();
+            return Err(UniformBufferUpdateError { .message = rstd::move(error.message) });
+        }
+        m_upload_serial = NextUniformUploadSerial();
+        if (m_uploaded_data.len() != m_data.len()) {
+            m_uploaded_data.resize(m_data.len(), u8(0));
+        }
+        if (byte_len > 0) {
+            std::memcpy(m_uploaded_data.data(), m_data.data(), byte_len);
+        }
     }
     m_material_version = material.customShader.value_version;
     m_uploaded         = true;
@@ -656,9 +709,11 @@ SharedUniformBufferBinding::SharedUniformBufferBinding(resource::BufferUseHandle
       m_layout(rstd::move(layout)),
       m_sources(rstd::move(sources)),
       m_data(rstd::vec::Vec<u8>::with_capacity(m_layout.size)),
+      m_uploaded_data(rstd::vec::Vec<u8>::with_capacity(m_layout.size)),
       m_matrix_convention(matrix_convention),
       m_matrix_abi(matrix_abi) {
     m_data.resize(m_layout.size, u8());
+    m_uploaded_data.resize(m_layout.size, u8());
 }
 
 auto SharedUniformBufferBinding::WriteSlot(usize slot_index, UniformValueView value) const
@@ -681,16 +736,19 @@ auto SharedUniformBufferBinding::Update(const UniformBufferFrameContext*        
         frame_context->Frame(), &resources_impl, SceneRenderViewKind::Primary);
     const UniformUpdateContext* context = &context_impl;
 
-    auto versions = Vec<u64>::with_capacity(m_sources.len());
+    m_versions.clear();
     bool changed  = ! m_uploaded;
     for (auto& bound : m_sources) {
-        auto version = bound.source->Version(context);
-        versions.push(rstd::move(version));
+        detail::SourceValueWriter writer_impl(*this, bound);
+        auto version = bound.source->VersionFor(context, &writer_impl);
+        m_versions.push(rstd::move(version));
         changed = changed || ! bound.evaluated || bound.version != version;
     }
     if (! changed) return Ok(empty {});
 
-    for (usize index {}; index < m_data.len(); ++index) m_data[index] = u8();
+    if (! m_data.is_empty()) {
+        std::memset(m_data.data(), 0, m_data.len().to_primitive());
+    }
     usize source_index {};
     for (auto& bound : m_sources) {
         detail::SourceValueWriter writer_impl(*this, bound);
@@ -701,14 +759,25 @@ auto SharedUniformBufferBinding::Update(const UniformBufferFrameContext*        
                 .message = rstd::move(evaluated).unwrap_err_unchecked().message,
             });
         }
-        bound.version   = versions[source_index++];
+        bound.version   = m_versions[source_index++];
         bound.evaluated = true;
     }
-    auto updated = buffers->UpdateBuffer(m_buffer, m_data.as_slice());
-    if (updated.is_err()) {
-        return Err(UniformBufferUpdateError {
-            .message = rstd::move(updated).unwrap_err_unchecked().message,
-        });
+    const auto byte_len = m_data.len().to_primitive();
+    if (! m_uploaded || m_uploaded_data.len() != m_data.len() ||
+        (byte_len > 0 && std::memcmp(m_data.data(), m_uploaded_data.data(), byte_len) != 0)) {
+        auto updated = buffers->UpdateBuffer(m_buffer, m_data.as_slice());
+        if (updated.is_err()) {
+            return Err(UniformBufferUpdateError {
+                .message = rstd::move(updated).unwrap_err_unchecked().message,
+            });
+        }
+        m_upload_serial = NextUniformUploadSerial();
+        if (m_uploaded_data.len() != m_data.len()) {
+            m_uploaded_data.resize(m_data.len(), u8(0));
+        }
+        if (byte_len > 0) {
+            std::memcpy(m_uploaded_data.data(), m_data.data(), byte_len);
+        }
     }
     m_uploaded = true;
     return Ok(empty {});
@@ -822,6 +891,7 @@ auto MakeUniformBufferBinding(const UniformBindingPrepareContext* prepare,
     auto sources = Vec<BoundUniformSource>::with_capacity(ranked.len());
     rstd::collections::HashMap<usize, usize> slot_sources;
     usize                                    source_ordinal { 0 };
+    bool                                     disjoint_sources { true };
     for (const auto& candidate : ranked) {
         auto source = prepare->ResolveSource(candidate.source);
         if (source.is_none()) {
@@ -848,6 +918,7 @@ auto MakeUniformBufferBinding(const UniformBindingPrepareContext* prepare,
             if (previous.is_none()) {
                 (void)slot_sources.insert(output.slot_index, source_ordinal);
             } else if (**previous != source_ordinal) {
+                disjoint_sources = false;
                 rstd_warn("uniform slot {} has multiple sources {} and {}",
                           layout.slots[output.slot_index].name.as_str(),
                           **previous,
@@ -868,7 +939,8 @@ auto MakeUniformBufferBinding(const UniformBindingPrepareContext* prepare,
                                  rstd::move(textures),
                                  render_view,
                                  matrix_convention,
-                                 matrix_abi);
+                                 matrix_abi,
+                                 disjoint_sources);
     return Ok(std::unique_ptr<UniformBufferUpdate>(
         std::make_unique<UniformBufferBinding>(rstd::move(binding))));
 }

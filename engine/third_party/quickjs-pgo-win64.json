@@ -1,0 +1,23 @@
+{
+  "schema": "quickjs-ir-pgo-v1",
+  "quickjs_revision": "3c051980ab7e783dfbfb1c70c014ce5e05ecf24c",
+  "profile_sha256": "3832b954cd9ee61cdb61cd72204af8b5cce7ecc040d5c4e866fbe2833722a695",
+  "static_function_names": "basename;function",
+  "compiler": "clang22 x86_64-w64-windows-gnu",
+  "flag": "-mllvm -static-func-full-module-prefix=false",
+  "training_scenes": [
+    "3589454154",
+    "3662790108",
+    "3713073223",
+    "3669681034"
+  ],
+  "warmup_frames_per_scene": 900,
+  "timed_frames_per_scene": 120,
+  "width": 3840,
+  "height": 2160,
+  "fps": 60,
+  "seed": 0,
+  "epoch_ms": 1791245708519,
+  "allocator": "mimalloc 3.5.3; only QuickJS",
+  "profile_contents": "C runtime counters and targets, no authored JavaScript source"
+}

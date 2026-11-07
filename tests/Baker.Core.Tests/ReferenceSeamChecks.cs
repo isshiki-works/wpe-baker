@@ -24,6 +24,7 @@ internal static class ReferenceSeamChecks
         Directory.CreateDirectory(directory);
         await HybridRouteAsync(check, tools!, directory);
         await EffectPrefixRouteAsync(check, tools!, directory);
+        await PaddedPlaybackQualityAsync(check, tools!, directory);
         await DirectPlaybackRouteAsync(check, tools!, directory);
     }
 
@@ -268,6 +269,61 @@ internal static class ReferenceSeamChecks
             "特效前缀路线：第 P 帧没回到第 0 帧时同样被闭合检验拒绝");
     }
 
+    private static async Task PaddedPlaybackQualityAsync(Action<bool, string> check, NativeTools tools, string directory)
+    {
+        const int sourceWidth = 131, sourceHeight = 99;
+        const ulong frames = 3;
+        byte[] rgba = new byte[sourceWidth * sourceHeight * 4];
+        for (int y = 0; y < sourceHeight; y++)
+            for (int x = 0; x < sourceWidth; x++)
+            {
+                int pixel = (y * sourceWidth + x) * 4;
+                rgba[pixel] = (byte)(80 + x); rgba[pixel + 1] = (byte)(60 + y);
+                rgba[pixel + 2] = 180; rgba[pixel + 3] = (byte)(100 + y);
+            }
+        foreach ((string name, bool packed, bool resized, bool vulkan) in new[]
+        {
+            ("odd-packed", true, false, false), ("odd-rgb", false, false, false),
+            ("scaled-offset-packed", true, true, false), ("vulkan-edge-reference", true, false, true)
+        })
+        {
+            string output = Path.Combine(directory, "quality-" + name);
+            Directory.CreateDirectory(output);
+            string retained = Path.Combine(output, "retained.rgba"), video = Path.Combine(output, "preview.mp4");
+            await File.WriteAllBytesAsync(retained, Enumerable.Range(0, (int)frames).SelectMany(_ => rgba).ToArray());
+            uint contentWidth = resized ? 97u : sourceWidth, contentHeight = resized ? 65u : sourceHeight;
+            uint offset = resized ? 16u : 0u;
+            var request = new RenderRequest("", "", output, sourceWidth, sourceHeight, 60, 1, frames,
+                PixelPacking: packed ? "rgba_side_by_side" : "rgb", EncodedFrames: frames,
+                EncodeWidth: contentWidth, EncodeHeight: contentHeight, EncodePadding: new(132, 100, offset, offset),
+                PlaybackEncoderKind: vulkan ? null : PlaybackEncoderSelection.Mf,
+                GpuEncoding: vulkan ? new() : null);
+            string prepare = resized ? $"scale={contentWidth}:{contentHeight}:flags=lanczos,format=rgba," : "";
+            prepare += $"pad=132:100:{offset}:{offset}:color=black@0,";
+            if (vulkan) prepare += "format=gbrap,fillborders=right=1:bottom=1:mode=smear,format=rgba,";
+            (string color, _) = Profile(losslessTest: false, video);
+            string layout = packed
+                ? $"[0:v]{prepare}split=2[c][a];[c]format=rgb24[rgb];[a]alphaextract,format=rgb24[alpha];[rgb][alpha]hstack=inputs=2,{color}[packed]"
+                : $"[0:v]{prepare}{color}[packed]";
+            await RunAsync(tools.Ffmpeg, ["-hide_banner", "-nostdin", "-v", "error", "-n", "-f", "rawvideo", "-pixel_format", "rgba",
+                "-video_size", $"{sourceWidth}x{sourceHeight}", "-framerate", "60/1", "-i", retained, "-an",
+                "-filter_complex", layout, "-map", "[packed]", "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", video]);
+            var manifest = new JsonObject
+            {
+                ["encoded_frames"] = frames,
+                ["request"] = JsonSerializer.SerializeToNode(request, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower }),
+                ["retained_frames"] = new JsonObject { ["path"] = retained, ["format"] = "rgba", ["width"] = sourceWidth,
+                    ["height"] = sourceHeight, ["frame_indices"] = new JsonArray(0UL, 1UL, 2UL) }
+            };
+            JsonObject quality = await new NativeRenderRunner(tools).GpuPlaybackQualityAsync(manifest, video,
+                new(sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight), packed, output, CancellationToken.None);
+            check(quality["passed"]!.GetValue<bool>() && quality["measured_ssim"]!.GetValue<double>() > .9999,
+                $"前缀画质参考 {name}：补边、偏移和打包与 FFmpeg 实际像素链一致（软件编码，无 GPU）");
+            check(quality["reference_source"]!.GetValue<string>().Contains(vulkan ? "repeated edge" : "transparent black", StringComparison.Ordinal),
+                $"前缀画质参考 {name}：报告准确区分透明黑与 Vulkan 重复边缘");
+        }
+    }
+
     /// <summary>
     /// 直编路线（不透明整幅组在渲染那一遍直接编出成品，不写无损 master）。这里证两件事：
     /// <list type="number">
@@ -413,7 +469,7 @@ internal static class ReferenceSeamChecks
     {
         Type type = typeof(NativeRenderRunner).Assembly.GetType("Baker.Core.PlaybackEncodeProfile")!;
         object profile = type.GetMethod("Create", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)!
-            .Invoke(null, [(uint)Width, (uint)Height, 60u, 1u, losslessTest, PlaybackEncoderSelection.Software])!;
+            .Invoke(null, [(uint)Width, (uint)Height, 60u, 1u, losslessTest, PlaybackEncoderSelection.Software, 0])!;
         return ((string)type.GetProperty("ColorFilter")!.GetValue(profile)!,
             (string[])type.GetMethod("OutputArguments", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!
                 .Invoke(profile, [60u, 1u, output])!);

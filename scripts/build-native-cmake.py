@@ -25,7 +25,7 @@ provenance = importlib.util.module_from_spec(provenance_spec)
 provenance_spec.loader.exec_module(provenance)
 
 # 预构建第三方库的缓存键：这些锁条目 + 定义它们编译方式的 CMake 文件。
-THIRD_PARTY_INPUTS = ["glslang", "freetype", "quickjs", "lz4", "vma", "spirv-reflect", "googletest", "llvm-mingw-22", "cmake", "ninja"]
+THIRD_PARTY_INPUTS = ["glslang", "freetype", "quickjs", "mimalloc", "lz4", "vma", "spirv-reflect", "googletest", "llvm-mingw-22", "cmake", "ninja"]
 
 def native_environment(toolchain: pathlib.Path, ffmpeg_root: pathlib.Path) -> dict[str, str]:
     environment = dict(os.environ)
@@ -78,7 +78,7 @@ def third_party_key(toolchain: pathlib.Path) -> str:
     digest = hashlib.sha256()
     for name in THIRD_PARTY_INPUTS:
         digest.update(json.dumps([name, lock[name]["url"], lock[name]["sha256"]]).encode("utf-8"))
-    for path in (ENGINE / "CMakeLists.txt", ENGINE / "CMakePresets.json"):
+    for path in (ENGINE / "CMakeLists.txt", ENGINE / "CMakePresets.json", ENGINE / "third_party/quickjs-pgo-win64.profdata"):
         digest.update(path.read_bytes())
     digest.update(toolchain.relative_to(ROOT).as_posix().encode("utf-8"))
     return digest.hexdigest()[:16]

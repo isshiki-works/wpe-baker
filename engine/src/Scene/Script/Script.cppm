@@ -171,6 +171,10 @@ public:
     // The package parser supplies this snapshot before pending initializers run.
     void RegisterInitialLayerConfig(owe::SceneNode* node, NJson config);
 
+    // Retain the animation-layer owner and its independent blend timeline.
+    void RegisterAnimationLayer(owe::SceneNode*, Arc<owe::PuppetLayer>, rstd::int32_t,
+                                 ref<str>, float, Option<owe::SceneAnimationTrack> = None());
+
     // Install the Scene root that backs `thisScene`. `thisScene.getLayer(name)`
     // searches from this node. Call once per scene after parsing finishes.
     void SetScene(owe::Scene* scene);

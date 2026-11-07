@@ -44,12 +44,13 @@ def main() -> None:
     expected_audio = ((37 + 120) * 1001 * 48000 // 120000) - (37 * 1001 * 48000 // 120000)
     assert native["audio_sample_frames"] == expected_audio
     encoded = manifest["encoded_stream"]["streams"][0]
-    assert encoded["nb_read_frames"] == "120" and encoded["avg_frame_rate"] == "120000/1001"
+    assert encoded["nb_frames"] == "120" and encoded["avg_frame_rate"] == "120000/1001"
     assert encoded["time_base"] == "1/120000" and encoded["duration_ts"] == 120 * 1001
     video = Path(request["output_directory"]) / "preview.mp4"
-    probe = subprocess.run([tools["ffprobe"], "-v", "error", "-show_streams", "-of", "json", str(video)],
+    probe = subprocess.run([tools["ffprobe"], "-v", "error", "-count_frames", "-show_streams", "-of", "json", str(video)],
                            capture_output=True, timeout=30, creationflags=flags, check=True)
     streams = json.loads(probe.stdout)["streams"]
+    assert next(s for s in streams if s["codec_type"] == "video")["nb_read_frames"] == "120"
     assert any(s["codec_type"] == "audio" and s["sample_rate"] == "48000" and s["channels"] == 2 for s in streams)
     report = {"status": "passed", "root": str(output), "native_frames": 120,
               "fps": "120000/1001", "warmup_frames": 37, "pcm_sample_frames": expected_audio,

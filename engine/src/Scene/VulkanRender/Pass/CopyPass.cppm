@@ -21,6 +21,9 @@ public:
         rstd::Option<TextureRequest>             src_request;
         rstd::Option<TextureRequest>             dst_request;
         bool                                     dst_matches_src { false };
+        SceneNode*                               empty_draw_consumer { nullptr };
+        u32                                      empty_draw_submesh {};
+        u32                                      empty_draw_instance_count { 1 };
 
         resource_registry::PreparedBarrierBatch before_barriers;
         resource_registry::PreparedBarrierBatch after_barriers;
@@ -37,6 +40,11 @@ public:
 
     void prepare(Scene&, const Device&, PassPrepareContext&) override;
     void record(PassRecordContext&) override;
+    void setEmptyDrawConsumer(SceneNode* node, u32 submesh, u32 instance_count = u32(1)) {
+        m_desc.empty_draw_consumer       = node;
+        m_desc.empty_draw_submesh        = submesh;
+        m_desc.empty_draw_instance_count = instance_count;
+    }
     void destory(const Device&) override;
     PassTimingTarget timingTarget(const PreparedPassResources&) const override;
 

@@ -37,9 +37,18 @@ struct DrawBufferRefs {
 
     std::vector<DrawBufferKey> vertex_keys;
     Option<DrawBufferKey>      index_key;
+    // Last successfully queued upload source; null after prepare. Identity only:
+    // never dereference these after a geometry replacement.
+    std::vector<const SceneVertexArray*> vertex_sources;
+    const SceneIndexArray*              index_source { nullptr };
 
     Vec<resource::BufferUseHandle>    vertices;
     Option<resource::BufferUseHandle> index;
+    rstd::array<VkBuffer, 8>          vk_vertex_buffers {};
+    rstd::array<VkDeviceSize, 8>      vk_vertex_offsets {};
+    usize                             vk_vertex_count {};
+    VkBuffer                          vk_index_buffer { VK_NULL_HANDLE };
+    VkDeviceSize                      vk_index_offset {};
 
     DrawBufferRefs()                                     = default;
     DrawBufferRefs(const DrawBufferRefs&)                = delete;
@@ -56,6 +65,7 @@ struct DrawBufferRequest {
     u32                                    submesh_index { 0 };
     u64                                    dynamic_allocation_generation { 0 };
     rstd::slice<resource::BufferUseHandle> buffer_uses;
+    rstd::slice<u32>                       active_vertex_streams {};
 };
 
 String BuildDrawBufferResourceName(SceneDrawItemId, DrawBufferRole, u32 stream_index = u32());

@@ -80,7 +80,7 @@ def main():
         "--pkg-config=" + (TOOLS / "pkgconf/bin/pkgconf.exe").as_posix(), "--pkg-config-flags=--static",
         "--disable-gpl", "--disable-version3", "--disable-nonfree", "--disable-autodetect", "--enable-shared", "--disable-static", "--disable-doc", "--disable-debug",
         "--disable-network", "--disable-avdevice", "--disable-avfilter", "--disable-programs", "--enable-ffprobe",
-        "--disable-pthreads", "--enable-w32threads", "--enable-libdav1d", "--enable-vulkan", "--enable-d3d11va", "--enable-dxva2",
+        "--disable-pthreads", "--enable-w32threads", "--enable-libdav1d", "--enable-vulkan", "--enable-d3d11va", "--enable-dxva2", "--enable-mediafoundation",
         "--glslc=" + glslang.as_posix(), "--extra-cflags=-I" + (ROOT / ".deps/vulkan-headers/include").as_posix(),
     ]
     configuration = {"source_commit": "38b88335f99e76ed89ff3c93f877fdefce736c13", "source_tag": "n8.1.2", "dav1d_commit": "54706fc6bc0cdecab7e9593974a4039cc038fca7", "dav1d_version": "1.5.4", "dav1d_license": "BSD-2-Clause", "shell": str(BASH), "flags": flags}

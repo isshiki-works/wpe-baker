@@ -277,6 +277,8 @@ struct TextureAllocationRuntime {
     virtual ~TextureAllocationRuntime() = default;
 
     virtual void Pump(double seconds) = 0;
+
+    u64 content_serial { 1 };
 };
 
 class TextureAllocation {
@@ -286,10 +288,15 @@ public:
         : m_slots(rstd::move(slots)), m_runtime(rstd::move(runtime)) {}
 
     auto View() const -> ImageSlotsRef { return ImageSlotsRef(m_slots); }
+    auto ContentSerial() const noexcept -> u64 {
+        return m_runtime ? m_runtime->content_serial : m_content_serial;
+    }
+    void BumpContentSerial() const noexcept { ++m_content_serial; }
 
 private:
     ImageSlots                                m_slots;
     std::shared_ptr<TextureAllocationRuntime> m_runtime;
+    mutable u64                               m_content_serial { 1 };
 };
 
 // ---------- Swapchain.hpp ----------
@@ -375,7 +382,8 @@ public:
 
     rstd::Option<rstd::sync::Arc<TextureAllocation>>
     AllocateImportedTexture(const Image&, Option<rstd::sync::Arc<VideoPlaybackState>> playback);
-    rstd::Option<rstd::sync::Arc<TextureAllocation>> AllocateTexture(TextureKey);
+    rstd::Option<rstd::sync::Arc<TextureAllocation>>
+    AllocateTexture(TextureKey, bool initialize_layout = true);
 
     /* Per-frame hook: advance every registered video-tex by `dt_seconds`,
      * pull as many decoded frames as needed to catch up to wall PTS,
@@ -396,7 +404,7 @@ public:
                                rstd::uint32_t w, rstd::uint32_t h);
 
 private:
-    Option<VmaImageParameters> CreateTex(TextureKey);
+    Option<VmaImageParameters> CreateTex(TextureKey, bool initialize_layout);
     u64                        nextImageGeneration();
     void                       AssignImageGeneration(VmaImageParameters&);
     /* VIDEO-typed Image branch of AllocateImportedTexture: registers an
@@ -412,6 +420,13 @@ private:
     VideoDecodeOptions m_video_decode_options;
     u64                m_next_image_generation { 1 };
     std::uint64_t      m_video_observation_tick { 0 };
+
+    struct PooledRenderTarget {
+        TextureKey                         key;
+        bool                               layout_initialized { false };
+        rstd::sync::Arc<TextureAllocation> allocation;
+    };
+    rstd::vec::Vec<PooledRenderTarget> m_rt_pool;
 
     /* Opaque pImpl for the active video-tex set. Defined inside
      * TextureCache.cpp to keep the video decoding types out of the public
@@ -505,7 +520,7 @@ struct ImagePrepareBackend {
     virtual auto CreateImportedTexture(rstd::ref<Image>                            image,
                                        Option<rstd::sync::Arc<VideoPlaybackState>> playback)
         -> rstd::Option<PreparedImageAllocation> = 0;
-    virtual auto AllocateTexture(TextureKey key)
+    virtual auto AllocateTexture(TextureKey key, bool initialize_layout = true)
         -> rstd::Option<rstd::sync::Arc<TextureAllocation>> = 0;
     virtual auto AllocateTransparentTexture(TextureKey key)
         -> rstd::Option<PreparedImageAllocation> = 0;
@@ -519,7 +534,8 @@ public:
     auto CreateImportedTexture(ref<Image>                                  image,
                                Option<rstd::sync::Arc<VideoPlaybackState>> playback)
         -> Option<PreparedImageAllocation> override;
-    auto AllocateTexture(TextureKey key) -> Option<rstd::sync::Arc<TextureAllocation>> override;
+    auto AllocateTexture(TextureKey key, bool initialize_layout = true)
+        -> Option<rstd::sync::Arc<TextureAllocation>> override;
     auto AllocateTransparentTexture(TextureKey key) -> Option<PreparedImageAllocation> override;
 
 private:

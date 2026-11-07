@@ -41,6 +41,14 @@ enum class CpuFrameStatus
     DeviceLost,
 };
 
+// A renderer-owned map; exchange its token to a consumer, then explicitly release it.
+// Copies are views, not independent ownership. Never outlives its renderer.
+struct BorrowedCpuReadback {
+    std::span<const std::uint8_t> pixels;
+    std::uint64_t serial { 0 };
+    std::uint32_t slot { 0 };
+};
+
 // Owns completed pixels or an explicit GPU submission receipt. Submitted frames
 // contain no CPU pixels or completed GPU timing. No pixel view outlives a map.
 struct CpuFrameResult {
@@ -48,6 +56,7 @@ struct CpuFrameResult {
     // times, not GPU timestamps, and distinguish preparation from waits.
     std::optional<double>    cpu_prepare_ms, cpu_render_wait_ms, cpu_encode_ms, cpu_pass_check_ms;
     std::optional<double>    cpu_scene_ms, cpu_resources_ms, cpu_script_ms, cpu_pending_wait_ms;
+    std::optional<double>    cpu_rt_refresh_ms, cpu_mesh_refresh_ms, cpu_material_refresh_ms;
     CpuFrameStatus           status { CpuFrameStatus::NotReady };
     std::uint32_t            width { 0 };
     std::uint32_t            height { 0 };
@@ -81,6 +90,10 @@ struct CpuFrameResult {
     VkResult                 gpu_timing_error_code { VK_SUCCESS };
     std::string              gpu_timing_message;
     std::vector<std::uint8_t> pixels;
+    BorrowedCpuReadback borrowed;
+    auto pixelBytes() const -> std::span<const std::uint8_t> {
+        return borrowed.serial ? borrowed.pixels : std::span<const std::uint8_t>(pixels);
+    }
     bool                     gpu_sampled { false };
     bool                     gpu_scene_overlap { false };
     std::uint64_t            gpu_readback_frames { 0 };
@@ -143,6 +156,7 @@ struct GpuEncodeOptions {
     std::string codec { "h264_vulkan" };
     bool packed_alpha { false };
     int qp { 18 };
+    int mf_quality { 80 };
     std::uint32_t fps_num { 30 }, fps_den { 1 };
     std::uint64_t first_frame { 0 }, frames { 0 };
     std::uint64_t encoded_frames { 0 };
@@ -165,6 +179,7 @@ struct RenderInitInfo {
     std::uint64_t    max_readback_bytes { 256ull * 1024 * 1024 };
     std::uint64_t    readback_timeout_ns { 10'000'000'000ull };
     bool             gpu_timing { false };
+    bool             borrow_cpu_readback { false };
     // Scale only explicitly eligible image-effect allocations, preserving authored layout.
     double           effect_render_scale { 1.0 };
     bool             match_effect_resolution { false };
@@ -227,6 +242,8 @@ public:
     // zero-fills a full frame before the readback copy overwrites it.
     // Optional: skipping it only costs the allocation.
     void recycleCpuPixels(std::vector<std::uint8_t>&&);
+    // Only after the consumer has finished reading; releases the map on this thread.
+    bool releaseCpuReadback(BorrowedCpuReadback&);
 
     void clearLastRenderGraph(
         RenderGraphResourceRetention retention = RenderGraphResourceRetention::KeepSceneTextures);

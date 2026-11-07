@@ -84,6 +84,15 @@ struct ExtraInfo {
     const RenderSceneSnapshot* render_scene { nullptr };
     const RenderLayerSelection* selection { nullptr };
     const RenderCaptureTarget* capture_target { nullptr };
+    struct EmptyDrawSnapshot {
+        rg::NodeHandle copy_pass;
+        rg::TextureNodeRef texture;
+        rg::NodeHandle consumer_pass;
+        SceneNode* node;
+        u32 submesh;
+        u32 instance_count { 1 };
+    };
+    std::vector<EmptyDrawSnapshot> empty_draw_snapshots;
     // 帧间反馈之一：帧内首次写入 LOAD 叠在上一帧残留上。先读后写的纹理见 RenderGraph::frameBoundaries。
     bool                       reads_previous_frame { false };
     // M2：每个输出 key 最近两次写入（版本号、use、变化集；change 为空 = 变化集 FULL）。
@@ -196,9 +205,11 @@ static void AddCopyPass(ExtraInfo& extra, rg::TextureDesc in, rg::TextureDesc ou
 }
 
 static rg::TextureNodeRef AddCopyPass(ExtraInfo& extra, rg::TextureNodeRef in,
-                                      Option<rg::TextureDesc> out_desc = None()) {
+                                      Option<rg::TextureDesc> out_desc = None(),
+                                      const vulkan::CustomShaderPass::Desc* consumer = nullptr,
+                                      rg::NodeHandle consumer_pass = {}) {
     rg::TextureNodeRef copy {};
-    extra.rgraph->addPass<vulkan::CopyPass>(
+    auto copy_pass = extra.rgraph->addPass<vulkan::CopyPass>(
         "copy"_str,
         rg::PassNode::Type::Copy,
         [&copy, in, out_desc = std::move(out_desc), &extra](rg::RenderGraphBuilder& builder,
@@ -222,6 +233,16 @@ static rg::TextureNodeRef AddCopyPass(ExtraInfo& extra, rg::TextureNodeRef in,
                 pdesc.dst_request->name = desc.key.clone();
             }
         });
+    if (consumer != nullptr && consumer->node.is_some() && extra.capture_target == nullptr) {
+        extra.empty_draw_snapshots.push_back(ExtraInfo::EmptyDrawSnapshot {
+            .copy_pass = copy_pass,
+            .texture = copy,
+            .consumer_pass = consumer_pass,
+            .node = consumer->node->as_raw_ptr(),
+            .submesh = consumer->submesh_index,
+            .instance_count = consumer->instance_count,
+        });
+    }
     return copy;
 }
 
@@ -319,7 +340,8 @@ static void AddMaterialTextureReads(SceneMaterial& material, std::string_view pa
                 });
             } else {
                 builder.markSelfWrite(*input);
-                input = Some(AddCopyPass(extra, *input));
+                input = Some(AddCopyPass(extra, *input, None(), &pdesc,
+                                         builder.workPassNode().handle));
                 (void)snapshots.insert(String::make(key), *input);
             }
         }
@@ -482,6 +504,18 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
 
     std::shared_ptr<const EffectMaskSupport> m2_candidate =
         effect_node != nullptr && mesh->Submeshes().size() == 1 ? extra.m2_candidate : nullptr;
+    bool isolate_static_base =
+        effect_node == nullptr && imgeff != nullptr && ! mesh->Dynamic() &&
+        mesh->Submeshes().size() == 1;
+    if (isolate_static_base) {
+        for (auto* eff : imgeff->ResolvedEffects()) {
+            if (eff == nullptr || eff->nodes.empty()) continue;
+            if (eff->nodes.front().mask_support != nullptr) {
+                isolate_static_base = false;
+            }
+            break;
+        }
+    }
     const bool draw_source = imgeff == nullptr || imgeff->RequiresSourceDraw();
     for (std::size_t smi = 0; draw_source && smi < mesh->Submeshes().size(); smi++) {
         const auto& submesh       = mesh->Submeshes()[smi];
@@ -515,6 +549,7 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
              render_view,
              effect_node,
              m2_candidate,
+             isolate_static_base,
              texture0_override = std::string(texture0_override),
              &scene,
              &extra](rg::RenderGraphBuilder& builder, vulkan::CustomShaderPass::Desc& pdesc) {
@@ -543,9 +578,15 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
                 if (output_rt.is_none()) return;
                 const auto& output_target = **output_rt;
                 const auto* pass_material = material_override ? material_override.get() : material;
-                const bool  reuses_previous_output =
+                const bool  full_transient_effect_overwrite =
+                    effect_node != nullptr && node->Camera() == "effect" && ! preserve_output &&
+                    ! LoadsPreviousAttachment(pass_material->blenmode) &&
+                    extra.transient_texture_families.contains(as_str(pass_output_s).unwrap());
+                const bool preserve_target_on_write =
+                    output_target.preserve_on_write && ! full_transient_effect_overwrite;
+                const bool reuses_previous_output =
                     ! (output_target.force_clear && ! preserve_output) &&
-                    (output_target.preserve_on_write || preserve_output ||
+                    (preserve_target_on_write || preserve_output ||
                      LoadsPreviousAttachment(pass_material->blenmode));
 
                 pdesc.output = pass_output_s;
@@ -553,8 +594,11 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
                     *material, pass_output, extra, builder, pdesc, reuses_previous_output,
                     texture0_override);
 
-                auto output_node =
-                    builder.createTexture(MakeTextureDesc(extra, pass_output_s), true);
+                auto output_desc = MakeTextureDesc(extra, pass_output_s);
+                if (isolate_static_base && output_desc.allocation_family.is_some()) {
+                    output_desc.allocation_family = Some(rstd::format("{}::base", pass_output_s));
+                }
+                auto output_node = builder.createTexture(output_desc, true);
                 auto output_state = builder.textureState(output_node);
                 rstd_assert(output_state.is_some());
                 if (output_state.is_none()) return;
@@ -591,7 +635,7 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
                     LoadsPreviousAttachment(pass_material->blenmode))
                     extra.reads_previous_frame = true;
                 pdesc.preserve_output = output_state->version > usize() &&
-                                        (output_target.preserve_on_write || preserve_output);
+                                        (preserve_target_on_write || preserve_output);
                 const bool uses_depth =
                     output_target.withDepth && vulkan::UsesDepthAttachment(*pass_material);
                 pdesc.has_depth_attachment = uses_depth;
@@ -633,15 +677,17 @@ static SceneNodeLayer* ToGraphPass(SceneNode* node, std::string_view output, Ext
                     pdesc.m2_alias_use   = m2_writes[0].use;
                 }
                 // 变化集只取决于效果本身（C_i ⊆ M_i），与本 pass 最后是否受限无关。
-                m2_writes.push_back(ExtraInfo::M2Write {
-                    .version = version,
-                    .use     = Some(output_state->use),
-                    .change  = (m2_candidate && ! material_override && ! reuses_previous_output &&
-                               ! preserve_output && output_target.sample_count == 1)
-                                   ? m2_candidate
-                                   : nullptr,
-                });
-                if (m2_writes.size() > 2) m2_writes.erase(m2_writes.begin());
+                if (! isolate_static_base) {
+                    m2_writes.push_back(ExtraInfo::M2Write {
+                        .version = version,
+                        .use     = Some(output_state->use),
+                        .change  = (m2_candidate && ! material_override && ! reuses_previous_output &&
+                                   ! preserve_output && output_target.sample_count == 1)
+                                       ? m2_candidate
+                                       : nullptr,
+                    });
+                    if (m2_writes.size() > 2) m2_writes.erase(m2_writes.begin());
+                }
                 builder.write(output_node);
             });
     }
@@ -961,6 +1007,21 @@ Box<rg::RenderGraph> owe::sceneToRenderGraph(Scene&                     scene,
     }
 
     StoreMipFramebufferHistory(extra);
+    // Decide after all scene readers exist. Capture FinPass reads are injected
+    // outside this graph, so capture jobs never register these candidates.
+    for (const auto& candidate : extra.empty_draw_snapshots) {
+        if (! rgraph->isExclusiveSnapshot(candidate.texture, candidate.copy_pass,
+                                          candidate.consumer_pass)) continue;
+        auto state = rgraph->passState(candidate.copy_pass);
+        if (state.is_none()) continue;
+        auto pass = rgraph->getPass(state->pass);
+        if (pass.is_none()) continue;
+        auto* copy = dynamic_cast<vulkan::CopyPass*>(&*pass);
+        if (copy != nullptr) {
+            copy->setEmptyDrawConsumer(
+                candidate.node, candidate.submesh, candidate.instance_count);
+        }
+    }
     // 读上一帧：LOAD 叠加，或有纹理本帧先读后写（_rt_MipMappedFrameBuffer 历史、动态模糊累积缓冲、排在后面的链接图层）
     if (reads_previous_frame)
         *reads_previous_frame = extra.reads_previous_frame || ! rgraph->frameBoundaries().is_empty();

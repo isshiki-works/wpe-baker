@@ -139,11 +139,33 @@ struct PassTimingTarget {
     const SceneNode* node { nullptr };
 };
 
+struct DrawRecordState {
+    VkPipeline pipeline {};
+    VkExtent2D default_extent {};
+    bool defaults_set { false };
+
+    void Reset() { pipeline = {}; defaults_set = false; }
+    bool UsePipeline(VkPipeline next) {
+        if (pipeline == next) return false;
+        pipeline = next;
+        defaults_set = false;
+        return true;
+    }
+    bool UseDefaultExtent(VkExtent2D next) {
+        const bool changed = !defaults_set || default_extent.width != next.width ||
+                             default_extent.height != next.height;
+        default_extent = next;
+        defaults_set = true;
+        return changed;
+    }
+};
+
 struct PassRecordContext {
     rstd::mut_ref<vvk::CommandBuffer>                              command;
     rstd::ref<PreparedPassResources>                               resources;
     rstd::mut_ref<resource_registry::DescriptorBindingRecordState> descriptor_state;
     Option<ref<resource_registry::PreparedDescriptorBinding>>      global_descriptor;
+    DrawRecordState* draw_state { nullptr };
 };
 
 struct PassUpdateContext {
@@ -294,6 +316,10 @@ public:
     VulkanPass()                                                                      = default;
     virtual ~VulkanPass()                                                             = default;
     virtual void                  prepare(Scene&, const Device&, PassPrepareContext&) = 0;
+    virtual bool                  refreshPreparedTextures(Scene&, const Device&, PassPrepareContext&,
+                                                          PassInvalidationFlags) {
+        return false;
+    }
     virtual bool                  update(PassUpdateContext&) { return true; }
     virtual void                  completeUpdate() {}
     virtual void                  record(PassRecordContext&) = 0;
@@ -317,6 +343,21 @@ public:
     virtual bool
     prepareResourceStates(resource_registry::TextureStatePreparer*) {
         return true;
+    }
+    // 写阴影图的 pass 返回本帧全部绘制输入的指纹；None = 不写阴影图；Some(0) = 写但本帧无法判定，必须重画。
+    virtual auto shadowAtlasSignature(slice<const UniformBufferUpdate*>) const -> Option<u64> {
+        return None();
+    }
+    struct StaticPassReuseInfo {
+        bool                     eligible { false };
+        bool                     loads_previous_attachment { false };
+        rstd::array<VkImage, 3>  written_images {};
+        rstd::array<VkImage, 16> sampled_images {};
+        u64                      signature {};
+    };
+    virtual auto staticReuseInfo(const resource_registry::PreparedResourceTable&,
+                                 slice<const UniformBufferUpdate*>) const -> StaticPassReuseInfo {
+        return {};
     }
     virtual Option<RenderItemId>        renderItemId() const { return None(); }
     virtual Option<PipelineCacheKey>    pipelineCacheKey() const { return None(); }

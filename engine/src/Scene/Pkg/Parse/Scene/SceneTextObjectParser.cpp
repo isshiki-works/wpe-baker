@@ -574,7 +574,7 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
             .height               = initial_layer_h,
             .allowReuse           = true,
             .force_clear          = ! copy_background_seed,
-            .clear_on_first_write = false,
+            .clear_on_first_write = true,
             .preserve_on_write    = copy_background_seed,
         };
         if (has_text_effect) {
@@ -1001,11 +1001,13 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
     };
 
     auto set_halign = [layouter, update_text_layout, anchor_state](std::string_view align) {
+        if (anchor_state->horizontal == align) return;
         anchor_state->horizontal = std::string(align);
         layouter->SetHorizontalAlign(align);
         update_text_layout(layouter->Metrics());
     };
     auto set_valign = [anchor_state, apply_text_anchor](std::string_view align) {
+        if (anchor_state->vertical == align) return;
         anchor_state->vertical = std::string(align);
         apply_text_anchor();
     };
@@ -1021,8 +1023,14 @@ void ParseTextObjImpl(SceneParseContext& context, wpscene::TextObject& obj) {
             next_point_size <= 0.0) {
             return;
         }
-        auto* next_face = font_cache_ptr->GetFace(
-            font_source, TextPointSizeToPx(static_cast<float>(next_point_size)));
+        if (std::abs(next_point_size - *current_point_size) <= 1e-6) return;
+        const auto next_px = TextPointSizeToPx(static_cast<float>(next_point_size));
+        if (layouter->Face() != nullptr &&
+            layouter->Face()->Metrics().pixel_size == next_px) {
+            *current_point_size = next_point_size;
+            return;
+        }
+        auto* next_face = font_cache_ptr->GetFace(font_source, next_px);
         if (next_face == nullptr) return;
         next_face->Populate(text::DecodeUtf8(*current_text));
         if (! EnsureTextAtlas(*scene, *next_face)) return;

@@ -8,6 +8,8 @@ import rstd;
 import eigen;
 import wescene.json;
 import wescene.pkg.parse;
+import wescene.pkg.scene_obj;
+import wescene.pkg.puppet;
 import wescene.types;
 import wescene.scene;
 import wescene.script;
@@ -596,6 +598,63 @@ TEST(ScriptNodeParent, DefaultLayerParentIsUndefined) {
 
     rt.TickAll();
     EXPECT_EQ(LastScalar(fs), 1.0);
+}
+
+TEST(ScriptBridge, InternedNamesPreserveBindingSettersAndReturnProxyReads) {
+    owe::SceneNode node;
+    JsRuntime rt;
+    auto* fs = rt.MakeFieldScript(
+        R"JS(
+            let boundLayer = thisLayer, boundObject = thisObject;
+            let layer = boundLayer, object = boundObject;
+            let layerWrites = 0, objectWrites = 0, reads = 0, calls = 0;
+            let previous;
+            Object.defineProperty(globalThis, 'thisLayer', {
+                configurable: true,
+                get() { return layer; },
+                set(value) { ++layerWrites; layer = value; }
+            });
+            Object.defineProperty(globalThis, 'thisObject', {
+                configurable: true,
+                get() { return object; },
+                set(value) { ++objectWrites; object = value; }
+            });
+            export function update(value) {
+                ++calls;
+                if (thisLayer !== boundLayer || thisObject !== boundObject ||
+                    layerWrites !== calls || objectWrites !== calls)
+                    throw new Error('Binding setter or restoration was skipped');
+                if (!(value instanceof Vec3) || value === previous ||
+                    (calls > 1 && value.z !== reads))
+                    throw new Error('Next value lost its fresh coerced shape');
+                previous = value;
+                thisLayer = null;
+                thisObject = null;
+                // Exclude the author's assignments from the next bind count.
+                --layerWrites;
+                --objectWrites;
+                return new Proxy({}, {
+                    get(target, key) {
+                        if (key === 'x' || key === 'y' || key === 'z') return ++reads;
+                        return undefined;
+                    }
+                });
+            }
+        )JS",
+        "test/bridge_interned_names",
+        FieldKind::Vec3,
+        owe::NJson::object(),
+        owe::NJson("0 0 0"),
+        &node);
+    ASSERT_NE(fs, nullptr);
+    for (unsigned frame = 0; frame < 3; ++frame) {
+        rt.TickAll();
+        ASSERT_TRUE(std::holds_alternative<Vec3Value>(fs->last_value()));
+        const auto& value = std::get<Vec3Value>(fs->last_value());
+        EXPECT_EQ(value.x, frame * 3 + 1);
+        EXPECT_EQ(value.y, frame * 3 + 2);
+        EXPECT_EQ(value.z, frame * 3 + 3);
+    }
 }
 
 TEST(ScriptNodeSoftMutation, VisibleAndAlphaWrites) {
@@ -2046,6 +2105,112 @@ TEST(ScriptLayerLookup, MissingLayerReturnsNullAfterSceneRootIsReady) {
     EXPECT_EQ(std::get<ScalarValue>(fs->last_value()).v, 1.0);
 }
 
+TEST(ScriptLayerLookup, CrossOwnerMaterialAnimationUsesActualTrackAndMarkers) {
+    owe::Scene scene;
+    auto layer = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(),
+                                          Eigen::Vector3f::Zero(), "interface_scale");
+    auto caller = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(),
+                                           Eigen::Vector3f::Zero(), "Song Name");
+    scene.RootMut()->AppendChild(layer.clone());
+    scene.RootMut()->AppendChild(caller.clone());
+    layer->SetCamera("material-animation-camera");
+    auto camera = Arc<owe::SceneCamera>::make(
+        owe::SceneCamera::MakeOrthographic(256, 256, -1.0, 1.0));
+    auto effect_layer = std::make_shared<owe::SceneNodeLayer>(
+        layer.as_ptr(), 256.0f, 256.0f, "_rt_material_animation");
+    auto effect = std::make_shared<owe::SceneImageEffect>();
+    auto effect_node = Arc<owe::SceneNode>::make();
+    auto mesh = std::make_shared<owe::SceneMesh>();
+    owe::SceneMaterial material;
+    material.customShader.constValues["g_Alpha"] = owe::ShaderValue(0.0f);
+    auto curve = Arc<owe::SceneAnimationCurve>::make();
+    curve->c0.push({ .frame = i32(), .value = 0.0f });
+    curve->c0.push({ .frame = i32(30), .value = 1.0f });
+    Vec<owe::SceneAnimationEvent> markers;
+    markers.push({ .frame = i32(), .name = String::make("accept_start"_str) });
+    markers.push({ .frame = i32(30), .name = String::make("accept_end"_str) });
+    auto clip = Arc<owe::SceneAnimationClip>::make(owe::SceneAnimationClipSpec {
+        .events = rstd::move(markers), .name = String::make("accept"_str),
+        .mode = String::make("single"_str), .fps = 30.0f, .end = i32(30),
+    });
+    auto playback = Arc<owe::SceneAnimationPlayback>::make(rstd::move(clip), true);
+    ASSERT_TRUE(material.SetShaderValueAnimation(String::make("g_Alpha"_str),
+        Arc<owe::SceneAnimationTrack>::make(owe::SceneAnimationTrack {
+            .curve = rstd::move(curve), .playback = playback.clone() })));
+    mesh->AddMaterial(std::move(material));
+    mesh->Submeshes().emplace_back();
+    auto* actual_material = mesh->Material();
+    ASSERT_NE(actual_material, nullptr);
+    actual_material->RegisterAnimations(*layer);
+    effect_node->AddMesh(std::move(mesh));
+    effect->nodes.push_back(owe::SceneImageEffectNode {
+        .output = owe::SceneEffectTarget::LayerNext(), .sceneNode = effect_node.clone(),
+    });
+    effect_layer->AddEffect(effect);
+    layer->AttachLayer(effect_layer);
+    scene.RegisterCamera(String::make("material-animation-camera"_str), rstd::move(camera));
+
+    JsRuntime runtime;
+    runtime.SetScene(&scene);
+    auto* observer = runtime.MakeFieldScript(R"JS(
+        shared.acceptStarted = 0;
+        shared.acceptEnded = 0;
+        const animation = thisObject.getAnimation();
+        export function animationEvent(event) {
+            if (event.name === 'accept_start') ++shared.acceptStarted;
+            if (event.name === 'accept_end') ++shared.acceptEnded;
+        }
+        export function update() {
+            if (animation.name !== 'accept' || thisObject.getAnimation('missing') !== undefined)
+                throw new Error('material property binding');
+            return shared.acceptStarted + 10 * shared.acceptEnded;
+        }
+    )JS", "test/material_animation_observer", FieldKind::Scalar, owe::NJson::object(),
+        owe::NJson(-1), ScriptBindingContext::ForMaterial(layer.as_ptr(), actual_material,
+            "alpha"_str, actual_material->ShaderValueAnimation("g_Alpha"_str)));
+    ASSERT_NE(observer, nullptr);
+    auto* controller = runtime.MakeFieldScript(R"JS(
+        let started = false;
+        export function update() {
+            const material = thisScene.getLayer('interface_scale').getEffect(0).getMaterial(0);
+            if (thisObject.getAnimation() !== undefined ||
+                material.getAnimation('missing') !== undefined)
+                throw new Error('caller property was borrowed');
+            if (!started) {
+                material.getAnimation('accept').play();
+                started = true;
+            }
+            return 'Bolero of Fire';
+        }
+    )JS", "test/material_animation_cross_owner", FieldKind::String, owe::NJson::object(),
+        owe::NJson(""), ScriptBindingContext::ForLayer(caller.as_ptr(), "text"_str));
+    ASSERT_NE(controller, nullptr);
+    runtime.SetSceneRoot(scene.RootMut().as_raw_ptr());
+    EXPECT_FALSE(playback->IsPlaying());
+    auto tick = [&](double delta) {
+        scene.Runtime().Advance(rstd::f64(delta));
+        scene.TickNodeFieldAnimations();
+        auto events = scene.ConsumeAnimationEvents();
+        runtime.TickAll(events.as_slice());
+        scene.TickMaterialShaderAnimations();
+    };
+    tick(0.0);
+    ASSERT_TRUE(std::holds_alternative<StringValue>(controller->last_value()));
+    EXPECT_EQ(std::get<StringValue>(controller->last_value()).s, "Bolero of Fire");
+    EXPECT_TRUE(playback->IsPlaying());
+    EXPECT_EQ(LastScalar(observer), 0.0);
+    EXPECT_FLOAT_EQ(actual_material->customShader.constValues.at("g_Alpha")[usize()], 0.0f);
+    tick(0.5);
+    EXPECT_EQ(playback->Frame(), i32(15));
+    EXPECT_EQ(LastScalar(observer), 1.0);
+    EXPECT_NEAR(actual_material->customShader.constValues.at("g_Alpha")[usize()], 0.5f, 1e-5);
+    tick(0.5);
+    EXPECT_EQ(playback->Frame(), i32(30));
+    EXPECT_FALSE(playback->IsPlaying());
+    EXPECT_EQ(LastScalar(observer), 11.0);
+    EXPECT_FLOAT_EQ(actual_material->customShader.constValues.at("g_Alpha")[usize()], 1.0f);
+}
+
 TEST(ScriptWEMath, SmoothStepCamelCaseAndAliases) {
     // ~165 corpus callsites use camelCase smoothStep; lowercase exists too.
     JsRuntime   rt;
@@ -3126,6 +3291,125 @@ TEST(SceneAnimationPlayback, SharedFieldBindingsAdvanceOnceAndPreserveEventOrder
     scene.Runtime().Advance(rstd::f64(0.1));
     scene.TickNodeFieldAnimations();
     EXPECT_EQ(playback->Frame(), i32(2));
+}
+
+TEST(ScriptAnimation, AnimationLayerOwnsBlendTimelineAndPreservesPlaybackAndMarkers) {
+    // The author's skeletal "Surprise" and blend timeline "surprise" are distinct.
+    const auto source = owe::NJson::parse(R"JSON({"animationlayers":[{
+        "id":637,"animation":570,"name":"Surprise","blend":{
+            "value":0,"animation":{"c0":[{"frame":0,"value":0},{"frame":4,"value":1}],
+                "options":{"name":"surprise","mode":"single","fps":4,
+                    "length":4,"startpaused":true}},"script":"export function update(v){return v;}"}
+    }]})JSON");
+    std::vector<owe::PuppetLayer::AnimationLayer> authored;
+    owe::wpscene::ReadPuppetAnimationLayers(source, authored);
+    ASSERT_EQ(authored.size(), 1u);
+    ASSERT_TRUE(authored[0].blend_binding.is_some());
+    auto copied = authored[0].Clone();
+    ASSERT_TRUE(copied.blend_binding.is_some());
+    EXPECT_EQ(*copied.blend_binding, source["animationlayers"][0]["blend"]);
+    EXPECT_EQ(copied.blend, 0.0);
+
+    auto puppet = Arc<owe::Puppet>::make();
+    auto& skeletal = puppet->anims.emplace_back();
+    skeletal.id = 570;
+    skeletal.name = String::make("skeletal"_str);
+    skeletal.mode = owe::Puppet::PlayMode::Loop;
+    skeletal.fps = 4;
+    skeletal.length = 4;
+    puppet->prepared();
+    auto layers = Arc<owe::PuppetLayer>::make(puppet.clone(), nullptr);
+    layers->prepared(slice<owe::PuppetLayer::AnimationLayer>::from_raw_parts(authored.data(), usize(1)));
+    auto skeletal_playback = layers->AnimationPlayback(637);
+    ASSERT_TRUE(skeletal_playback.is_some());
+    ASSERT_TRUE((*skeletal_playback)->IsPlaying());
+
+    auto curve = Arc<owe::SceneAnimationCurve>::make();
+    curve->c0.push({ .frame = i32(), .value = 0.0f });
+    curve->c0.push({ .frame = i32(4), .value = 1.0f });
+    Vec<owe::SceneAnimationEvent> markers;
+    markers.push({ .frame = i32(1), .name = String::make("surprise"_str) });
+    auto clip = Arc<owe::SceneAnimationClip>::make(owe::SceneAnimationClipSpec {
+        .events = rstd::move(markers), .name = String::make("surprise"_str),
+        .mode = String::make("single"_str), .fps = 4.0f, .end = i32(4),
+    });
+    auto timeline = Arc<owe::SceneAnimationPlayback>::make(rstd::move(clip), true);
+    owe::Scene scene;
+    auto owner = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(),
+                                           Eigen::Vector3f::Zero(), "link_child");
+    owner->RegisterPuppetAnimation((*skeletal_playback).clone());
+    scene.RootMut()->AppendChild(owner.clone());
+    ScriptScene scripts;
+    auto& runtime = scripts.runtime();
+    runtime.RegisterAnimationLayer(owner.as_ptr(), layers.clone(), 637, "Surprise"_str, 0.0f,
+        Some(owe::SceneAnimationTrack { .curve = rstd::move(curve), .playback = timeline.clone() }));
+    auto* blend = runtime.MakeFieldScript(R"JS(
+        shared.markers = 0;
+        export function animationEvent(event) {
+            if (event.name === 'surprise') ++shared.markers;
+        }
+        export function update(value) {
+            if (thisObject.getAnimation('surprise').name !== 'surprise')
+                throw new Error('wrong timeline owner');
+            return value + 0.125;
+        }
+    )JS", "test/animation_layer_blend", FieldKind::Scalar, owe::NJson::object(), owe::NJson(0),
+        ScriptBindingContext::ForAnimationLayer(owner.as_ptr(), layers.clone(), 637,
+            "blend"_str, timeline.clone()));
+    ASSERT_NE(blend, nullptr);
+    scripts.AddActuator({ blend, [layer = layers.as_ptr()](const ScriptValue& value) {
+        if (const auto* scalar = std::get_if<ScalarValue>(&value))
+            (void)layer->SetAnimationLayerBlend(637, scalar->v);
+    } });
+    auto caller_clip = Arc<owe::SceneAnimationClip>::make(owe::SceneAnimationClipSpec {
+        .name = String::make("surprise"_str), .fps = 8.0f, .end = i32(8),
+    });
+    auto caller_animation = Arc<owe::SceneAnimationPlayback>::make(rstd::move(caller_clip));
+    auto* probe = runtime.MakeFieldScript(R"JS(
+        export function init() {
+            const layer = thisScene.getLayer('link_child').getAnimationLayer(0);
+            layer.pause();
+            if (layer.isPlaying()) throw new Error('skeletal pause was not forwarded');
+            layer.setFrame(2);
+            if (layer.getFrame() !== 2) throw new Error('skeletal frame was not forwarded');
+            layer.play();
+        }
+        export function update() {
+            const layer = thisScene.getLayer('link_child').getAnimationLayer('Surprise');
+            const animation = layer.getAnimation('surprise');
+            if (animation === undefined || layer.getAnimation('missing') !== undefined ||
+                layer.name !== 'Surprise' || !layer.isPlaying())
+                throw new Error('animation-layer contract');
+            if (engine.runtime >= 0.25) animation.play();
+            return (animation.isPlaying() ? 100 : 0) + shared.markers;
+        }
+    )JS", "test/animation_layer_cross_owner", FieldKind::Scalar, owe::NJson::object(),
+        owe::NJson(-1), ScriptBindingContext::ForLayer(scene.RootMut().as_raw_ptr(), "angles"_str,
+            Some(caller_animation.clone())));
+    ASSERT_NE(probe, nullptr);
+    runtime.SetSceneRoot(scene.RootMut().as_raw_ptr());
+    auto tick = [&](double elapsed) {
+        scene.Runtime().Advance(rstd::f64(elapsed));
+        scene.TickNodeFieldAnimations();
+        auto events = scene.ConsumeAnimationEvents();
+        FrameInputs inputs;
+        inputs.runtime = scene.Runtime().Frame().elapsed.to_primitive();
+        scripts.Tick(inputs, events.as_slice());
+    };
+    tick(0.0);
+    EXPECT_EQ(LastScalar(probe), 0.0);
+    EXPECT_FALSE(timeline->IsPlaying());
+    EXPECT_TRUE((*skeletal_playback)->IsPlaying());
+    EXPECT_DOUBLE_EQ(*layers->AnimationLayerBlend(637), 0.125);
+    tick(0.25); // JavaScript starts the real, initially paused blend timeline.
+    EXPECT_EQ(LastScalar(probe), 100.0);
+    tick(0.25);
+    EXPECT_EQ(timeline->Frame(), i32(1));
+    EXPECT_EQ(LastScalar(probe), 101.0);
+    // The shared Bezier solver approximates the scalar within 1e-5.
+    EXPECT_NEAR(LastScalar(blend), 0.375, 1e-5);
+    EXPECT_DOUBLE_EQ(*layers->AnimationLayerBlend(637), LastScalar(blend));
+    EXPECT_TRUE((*skeletal_playback)->IsPlaying());
 }
 
 TEST(ScriptAnimation, BroadcastsMarkersAndControlsSharedPlayback) {

@@ -1,7 +1,11 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <chrono>
 #include <cstdio>
+#include <limits>
+#include <memory>
+#include <vector>
 
 import eigen;
 import rstd;
@@ -13,11 +17,234 @@ import wescene.pkg.parse;
 import wescene.scene;
 import wescene.script;
 import wescene.text;
+import wescene.types;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
 using rstd::cppstd::to_string;
 using rstd::sync::Arc;
+
+TEST(SceneNode, RootNameIndexPreservesDfsFirstAndRefreshesAfterTreeChanges) {
+    auto named = [](std::string name) {
+        return Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(),
+                                         Eigen::Vector3f::Zero(), name);
+    };
+    auto root = named("root");
+    auto group = named("group");
+    auto nested = named("duplicate");
+    auto sibling = named("duplicate");
+    auto root_named_child = named("root");
+    group->AppendChild(nested.clone());
+    root->AppendChild(group.clone());
+    root->AppendChild(sibling.clone());
+    root->AppendChild(root_named_child.clone());
+    EXPECT_EQ(root->FindByName("root"), root.as_ptr());
+    EXPECT_EQ(root->FindByName("duplicate"), nested.as_ptr());
+    EXPECT_EQ(root->FindByName("absent"), nullptr);
+    EXPECT_EQ(root->FindByName("absent"), nullptr);
+    auto appended = named("absent");
+    group->AppendChild(appended.clone());
+    EXPECT_EQ(root->FindByName("absent"), appended.as_ptr());
+    ASSERT_TRUE(root->MoveChild(*sibling, usize()));
+    EXPECT_EQ(root->FindByName("duplicate"), sibling.as_ptr());
+    EXPECT_EQ(group->FindByName("duplicate"), nested.as_ptr());
+    EXPECT_EQ(group->FindByName("root"), nullptr);
+    root->ClearChildren();
+    EXPECT_TRUE(root->GetChildren().is_empty());
+    EXPECT_EQ(root->FindByName("duplicate"), nullptr);
+    EXPECT_EQ(root->FindByName("absent"), nullptr);
+    EXPECT_EQ(root->FindByName("root"), root.as_ptr());
+}
+
+TEST(SceneNode, RootNameIndexCoversSharedMembershipAndTransformOnlyAnchors) {
+    owe::SceneNode first;
+    owe::SceneNode second;
+    owe::SceneNode anchor;
+    auto shared = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(),
+                                           Eigen::Vector3f::Zero(), "shared");
+    first.AppendChild(shared.clone());
+    EXPECT_EQ(first.FindByName("shared"), shared.as_ptr());
+    EXPECT_EQ(first.FindByName("nested"), nullptr);
+    second.AppendChild(shared.clone());
+    EXPECT_EQ(first.GetChildren().len(), usize(1));
+    EXPECT_EQ(second.GetChildren().len(), usize(1));
+    EXPECT_EQ(second.FindByName("nested"), nullptr);
+    shared->SetParentAnchor(&anchor);
+    auto nested = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(),
+                                           Eigen::Vector3f::Zero(), "nested");
+    shared->AppendChild(nested.clone());
+    EXPECT_EQ(first.FindByName("nested"), nested.as_ptr());
+    EXPECT_EQ(second.FindByName("nested"), nested.as_ptr());
+    first.ClearChildren();
+    EXPECT_EQ(shared->Parent(), &anchor);
+    EXPECT_EQ(first.FindByName("shared"), nullptr);
+    EXPECT_EQ(second.FindByName("nested"), nested.as_ptr());
+    second.ClearChildren();
+    EXPECT_EQ(shared->Parent(), &anchor);
+    EXPECT_EQ(second.FindByName("nested"), nullptr);
+}
+
+TEST(SceneNode, ClearChildrenDetachesOnlyItsOwnTransformParent) {
+    owe::SceneNode first;
+    owe::SceneNode second;
+    first.SetTranslate({ 10.0f, 0.0f, 0.0f });
+    second.SetTranslate({ 20.0f, 0.0f, 0.0f });
+    auto child = Arc<owe::SceneNode>::make();
+    child->SetTranslate({ 1.0f, 0.0f, 0.0f });
+    first.AppendChild(child.clone());
+    second.AppendChild(child.clone());
+    child->UpdateTrans();
+    EXPECT_DOUBLE_EQ(child->ModelTrans()(0, 3), 21.0);
+    first.ClearChildren();
+    EXPECT_EQ(child->Parent(), &second);
+    second.ClearChildren();
+    EXPECT_EQ(child->Parent(), nullptr);
+    child->UpdateTrans();
+    EXPECT_DOUBLE_EQ(child->ModelTrans()(0, 3), 1.0);
+}
+
+TEST(SceneNode, DISABLED_RootNameLookupCpuBenchmark) {
+    owe::SceneNode indexed;
+    owe::SceneNode dfs;
+    owe::SceneNode anchor;
+    dfs.SetParentAnchor(&anchor);
+    for (std::size_t i = 0; i < 846; ++i) {
+        auto child = Arc<owe::SceneNode>::make(Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(),
+                                              Eigen::Vector3f::Zero(), "layer_" + std::to_string(i));
+        indexed.AppendChild(child.clone());
+        dfs.AppendChild(child.clone());
+    }
+    std::vector<std::string> queries;
+    for (std::size_t i = 0; i < 313; ++i)
+        queries.push_back(i < 52 ? "missing_" + std::to_string(i)
+                                 : "layer_" + std::to_string((i * 17) % 846));
+    (void)indexed.FindByName(queries[0]);
+    auto measure = [&](owe::SceneNode& root) {
+        const auto begin = std::chrono::steady_clock::now();
+        std::size_t hits = 0;
+        for (std::size_t round = 0; round < 500; ++round)
+            for (const auto& query : queries) hits += root.FindByName(query) != nullptr;
+        const auto elapsed = std::chrono::steady_clock::now() - begin;
+        EXPECT_EQ(hits, std::size_t(500 * 261));
+        return std::chrono::duration<double, std::micro>(elapsed).count() / 500.0;
+    };
+    const auto indexed_us = measure(indexed);
+    const auto dfs_us = measure(dfs);
+    std::printf("name_lookup nodes=847 lookups=313 indexed_us/frame=%.3f dfs_us/frame=%.3f\n",
+                indexed_us, dfs_us);
+}
+
+TEST(SceneNode, EqualLocalWritesKeepParentInvalidationAndExactChanges) {
+    auto parent = Arc<owe::SceneNode>::make();
+    auto child  = Arc<owe::SceneNode>::make();
+    parent->AppendChild(child.clone());
+    child->UpdateTrans();
+
+    parent->SetTranslate({ 10.0f, 20.0f, 30.0f });
+    child->SetTranslate(child->Translate());
+    child->SetScale(child->Scale());
+    child->SetRotation(child->Rotation());
+    child->SetLocalFrame(child->LocalFrame());
+    child->UpdateTrans();
+    EXPECT_DOUBLE_EQ(child->ModelTrans()(0, 3), 10.0);
+    EXPECT_DOUBLE_EQ(child->ModelTrans()(1, 3), 20.0);
+
+    const float tiny = std::numeric_limits<float>::epsilon();
+    parent->SetTranslate({ tiny, 0.0f, 0.0f });
+    parent->SetScale({ 1.0f + tiny, 1.0f, 1.0f });
+    child->UpdateTrans();
+    EXPECT_DOUBLE_EQ(child->ModelTrans()(0, 3), static_cast<double>(tiny));
+    EXPECT_DOUBLE_EQ(child->ModelTrans()(0, 0), static_cast<double>(1.0f + tiny));
+    parent->SetRotation({ 0.0f, 0.0f, tiny });
+    child->UpdateTrans();
+    EXPECT_GT(child->ModelTrans()(1, 0), 0.0);
+
+    auto frame = Eigen::Matrix4d::Identity().eval();
+    frame(2, 3) = 0.125;
+    child->SetLocalFrame(frame);
+    child->UpdateTrans();
+    EXPECT_DOUBLE_EQ(child->ModelTrans()(2, 3), 0.125);
+}
+
+TEST(SceneNode, NanWritesAreNotEqualAndFiniteWritesRecover) {
+    owe::SceneNode node;
+    node.UpdateTrans();
+    node.SetTranslate({ std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f });
+    node.UpdateTrans();
+    EXPECT_FALSE(node.ModelTrans().allFinite());
+    node.SetTranslate(node.Translate());
+    node.UpdateTrans();
+    EXPECT_FALSE(node.ModelTrans().allFinite());
+    node.SetTranslate(Eigen::Vector3f::Zero());
+    node.UpdateTrans();
+    EXPECT_TRUE(node.ModelTrans().isIdentity());
+}
+
+TEST(SceneNode, SignedZeroChangesRemainVisibleInAllLocalFields) {
+    owe::SceneNode node;
+    node.SetScale({ 0.0f, 1.0f, 1.0f });
+    for (const bool negative : { true, false }) {
+        const float zero = negative ? -0.0f : 0.0f;
+        node.SetTranslate({ zero, 0.0f, 0.0f });
+        node.SetRotation({ zero, 0.0f, 0.0f });
+        node.SetScale({ zero, 1.0f, 1.0f });
+        auto frame = Eigen::Matrix4d::Identity().eval();
+        frame(0, 3) = static_cast<double>(zero);
+        node.SetLocalFrame(frame);
+        EXPECT_EQ(std::signbit(node.Translate().x()), negative);
+        EXPECT_EQ(std::signbit(node.Rotation().x()), negative);
+        EXPECT_EQ(std::signbit(node.Scale().x()), negative);
+        EXPECT_EQ(std::signbit(node.LocalFrame()(0, 3)), negative);
+        EXPECT_EQ(std::signbit(1.0f / node.Translate().x()), negative);
+    }
+}
+
+TEST(TextLayouter, PrefixRewriteKeepsReservedBuffersAndExcludesStaleQuads) {
+    auto font = owe::text::FontCache::ResolveSystemFont(
+        "systemfont_monospace", /*fallback_to_any=*/true, nullptr);
+    ASSERT_NE(font.bytes, nullptr);
+    owe::text::FontCache cache;
+    auto* face = cache.GetFace(font, 64);
+    ASSERT_NE(face, nullptr);
+    face->Populate(owe::text::DecodeUtf8("AB"));
+
+    constexpr std::size_t capacity = 64;
+    auto make_mesh = [] {
+        auto mesh = std::make_shared<owe::SceneMesh>(true);
+        std::vector<owe::SceneVertexArray::SceneVertexAttribute> attributes {
+            { .name = "a_Position", .type = owe::VertexType::FLOAT3 },
+            { .name = "a_TexCoord", .type = owe::VertexType::FLOAT2 },
+            { .name = "a_Color", .type = owe::VertexType::FLOAT4 },
+        };
+        mesh->AddVertexArray(owe::SceneVertexArray(attributes, usize(capacity * 4)));
+        mesh->AddIndexArray(owe::SceneIndexArray(usize(capacity * 6)));
+        return mesh;
+    };
+    auto mesh = make_mesh();
+    owe::text::TextLayouter layout(face, mesh, {}, capacity);
+    layout.SetText("AB");
+    const auto reserved_bytes = mesh->GetVertexArray(usize()).DataSizeOf();
+    EXPECT_EQ(mesh->GetIndexArray(usize()).DataCount(), usize(capacity * 6));
+    layout.SetText("A");
+    EXPECT_EQ(mesh->GetIndexArray(usize()).RenderDataCount(), usize(6));
+    layout.SetText("");
+    EXPECT_EQ(mesh->GetIndexArray(usize()).RenderDataCount(), usize());
+    layout.SetText("BABA");
+    EXPECT_EQ(mesh->GetIndexArray(usize()).RenderDataCount(), usize(24));
+    EXPECT_EQ(mesh->GetVertexArray(usize()).DataSizeOf(), reserved_bytes);
+    EXPECT_EQ(mesh->GetIndexArray(usize()).DataCount(), usize(capacity * 6));
+
+    auto reference_mesh = make_mesh();
+    owe::text::TextLayouter reference(face, reference_mesh, {}, capacity);
+    reference.SetText("BABA");
+    const auto& vertices = mesh->GetVertexArray(usize());
+    const auto& expected = reference_mesh->GetVertexArray(usize());
+    for (std::size_t i = 0; i < 16 * vertices.OneSize().to_primitive(); ++i)
+        EXPECT_FLOAT_EQ(vertices.Data()[i], expected.Data()[i]);
+    for (std::size_t i = 0; i < 24; ++i)
+        EXPECT_EQ(mesh->GetIndexArray(usize()).Data()[i],
+                  reference_mesh->GetIndexArray(usize()).Data()[i]);
+}
 
 namespace scene_test
 {
@@ -947,6 +1174,117 @@ TEST(SceneCameraProjection, AppliesViewportScaleToOrthographicExtent) {
     extent = scene.OrthographicProjectionExtent();
     EXPECT_DOUBLE_EQ(extent[usize()], 1920.0);
     EXPECT_DOUBLE_EQ(extent[usize(1)], 1080.0);
+}
+
+TEST(SceneCameraProjection, SameFrameSettersInvalidatePrimaryAndReflection) {
+    using View = owe::SceneRenderViewKind;
+    auto camera = owe::SceneCamera::MakePerspective(1.5, 0.1, 1000.0, 45.0);
+    camera.SetLookAt({ 0.0, 3.0, 8.0 }, { 0.0, 1.0, 0.0 }, Eigen::Vector3d::UnitY());
+    auto verify = [&] {
+        auto expected = owe::SceneCamera::MakePerspective(camera.Aspect(), camera.NearClip(),
+                                                           camera.FarClip(), camera.Fov());
+        const auto transforms = camera.Transforms();
+        expected.SetLookAt(transforms.eye, transforms.center, transforms.up);
+        EXPECT_TRUE(camera.GetViewMatrix().isApprox(expected.GetViewMatrix(), 1e-12));
+        EXPECT_TRUE(camera.GetViewProjectionMatrix().isApprox(
+            expected.GetViewProjectionMatrix(), 1e-12));
+        EXPECT_TRUE(camera.GetViewProjectionMatrix(View::Reflection).isApprox(
+            expected.GetViewProjectionMatrix(View::Reflection), 1e-12));
+    };
+    verify();
+    const auto initial = camera.GetViewProjectionMatrix();
+    camera.SetFov(70.0);
+    verify();
+    EXPECT_FALSE(camera.GetViewProjectionMatrix().isApprox(initial));
+    camera.SetAspect(0.75);
+    verify();
+    camera.SetLookAt({ 1.0, 4.0, 9.0 }, { 0.0, 2.0, 0.0 }, Eigen::Vector3d::UnitY());
+    verify();
+
+    auto orthographic = owe::SceneCamera::MakeOrthographic(400.0, 300.0, -2.0, 10.0);
+    (void)orthographic.GetViewProjectionMatrix(View::Reflection);
+    orthographic.SetWidth(800.0);
+    EXPECT_TRUE(orthographic.GetViewMatrix().isIdentity());
+    EXPECT_DOUBLE_EQ(orthographic.GetViewProjectionMatrix()(0, 0), 2.0 / 800.0);
+    orthographic.SetHeight(600.0);
+    EXPECT_DOUBLE_EQ(orthographic.GetViewProjectionMatrix()(1, 1), 2.0 / 600.0);
+    auto expected = owe::SceneCamera::MakeOrthographic(800.0, 600.0, -2.0, 10.0);
+    EXPECT_TRUE(orthographic.GetViewProjectionMatrix(View::Reflection).isApprox(
+        expected.GetViewProjectionMatrix(View::Reflection), 1e-12));
+}
+
+TEST(SceneCameraProjection, NodeAndParentChangesInvalidateBothViewsWithoutFrameAdvance) {
+    using View = owe::SceneRenderViewKind;
+    auto parent = Arc<owe::SceneNode>::make();
+    auto node = Arc<owe::SceneNode>::make();
+    parent->AppendChild(node.clone());
+    auto camera = owe::SceneCamera::MakeOrthographic(800.0, 600.0, -10.0, 10.0);
+    camera.AttatchNode(node.as_ptr());
+    auto verify = [&] {
+        auto expected = owe::SceneCamera::MakeOrthographic(800.0, 600.0, -10.0, 10.0);
+        expected.AttatchNode(node.as_ptr());
+        node->UpdateTrans();
+        EXPECT_TRUE(camera.GetViewMatrix().isApprox(node->ModelTrans().inverse(), 1e-12));
+        EXPECT_TRUE(camera.GetViewProjectionMatrix(View::Reflection).isApprox(
+            expected.GetViewProjectionMatrix(View::Reflection), 1e-12));
+        EXPECT_TRUE(camera.GetViewProjectionMatrix().isApprox(
+            expected.GetViewProjectionMatrix(), 1e-12));
+    };
+    verify();
+    parent->SetTranslate({ 1.0f, 2.0f, 3.0f });
+    verify();
+    node->SetRotation({ 0.2f, 0.1f, 0.3f });
+    node->SetScale({ 2.0f, 3.0f, 4.0f });
+    verify();
+    camera.SetLookAt({ 0.0, 0.0, 5.0 }, Eigen::Vector3d::Zero(), Eigen::Vector3d::UnitY());
+    (void)camera.GetViewProjectionMatrix();
+    camera.AttatchNode(node.as_ptr());
+    verify();
+    owe::SceneNode other;
+    other.SetTranslate({ 4.0f, 5.0f, 6.0f });
+    camera.AttatchNode(&other);
+    other.UpdateTrans();
+    EXPECT_TRUE(camera.GetViewMatrix().isApprox(other.ModelTrans().inverse(), 1e-12));
+}
+
+TEST(SceneCameraProjection, CloneChangesProjectionModeClipPlanesAndView) {
+    using View = owe::SceneRenderViewKind;
+    auto target = owe::SceneCamera::MakeOrthographic(800.0, 600.0, -2.0, 10.0);
+    (void)target.GetViewProjectionMatrix();
+    (void)target.GetViewProjectionMatrix(View::Reflection);
+    auto source = owe::SceneCamera::MakePerspective(0.75, 5.0, 100.0, 70.0);
+    source.SetLookAt({ 0.0, 4.0, 9.0 }, Eigen::Vector3d::Zero(), Eigen::Vector3d::UnitY());
+    target.Clone(source);
+    EXPECT_TRUE(target.GetViewMatrix().isApprox(source.GetViewMatrix(), 1e-12));
+    EXPECT_TRUE(target.GetViewProjectionMatrix().isApprox(source.GetViewProjectionMatrix(), 1e-12));
+    EXPECT_TRUE(target.GetViewProjectionMatrix(View::Reflection).isApprox(
+        source.GetViewProjectionMatrix(View::Reflection), 1e-12));
+    auto copy = target;
+    EXPECT_TRUE(copy.GetViewProjectionMatrix(View::Reflection).isApprox(
+        target.GetViewProjectionMatrix(View::Reflection), 1e-12));
+}
+
+TEST(SceneCameraProjection, InvalidNodeFramesKeepFallbackAndRecover) {
+    owe::SceneNode node;
+    auto camera = owe::SceneCamera::MakeOrthographic(800.0, 600.0, -10.0, 10.0);
+    camera.AttatchNode(&node);
+    (void)camera.GetViewMatrix();
+    node.SetScale({ 0.0f, 1.0f, 1.0f });
+    EXPECT_TRUE(camera.GetViewMatrix().isIdentity());
+    EXPECT_TRUE(camera.GetViewMatrix().isIdentity());
+    node.SetTranslate({ std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f });
+    EXPECT_TRUE(camera.GetViewMatrix().isIdentity());
+    auto fallback = owe::SceneCamera::MakeOrthographic(800.0, 600.0, -10.0, 10.0);
+    EXPECT_TRUE(camera.GetViewProjectionMatrix(owe::SceneRenderViewKind::Reflection).isApprox(
+        fallback.GetViewProjectionMatrix(owe::SceneRenderViewKind::Reflection), 1e-12));
+    node.SetScale(Eigen::Vector3f::Ones());
+    node.SetTranslate({ 1.0f, 2.0f, 3.0f });
+    node.UpdateTrans();
+    EXPECT_TRUE(camera.GetViewMatrix().isApprox(node.ModelTrans().inverse(), 1e-12));
+    auto expected = owe::SceneCamera::MakeOrthographic(800.0, 600.0, -10.0, 10.0);
+    expected.AttatchNode(&node);
+    EXPECT_TRUE(camera.GetViewProjectionMatrix(owe::SceneRenderViewKind::Reflection).isApprox(
+        expected.GetViewProjectionMatrix(owe::SceneRenderViewKind::Reflection), 1e-12));
 }
 
 TEST(SceneCameraPath, UserBindingMutatesRegisteredArc) {

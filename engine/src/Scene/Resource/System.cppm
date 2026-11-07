@@ -134,7 +134,9 @@ public:
                                        m_registries.Buffers(),
                                        &m_registries.BufferManager(),
                                        m_registries.Shaders());
-        auto started = service.Begin(plan, rstd::move(providers), sections);
+        const PreparedResourceTable* previous_table =
+            sections == resource::ResourcePlanTextures ? &m_prepared : nullptr;
+        auto started = service.Begin(plan, rstd::move(providers), sections, previous_table);
         if (started.is_err()) {
             AbortPreparePlan();
             return Err(rstd::move(started).unwrap_err_unchecked());
@@ -160,9 +162,29 @@ public:
             return Ok(ResourcePrepareProgress::BatchReady);
         }
 
-        const auto& plan     = session.Plan();
-        const auto  sections = session.Sections();
-        auto        next     = rstd::move(session).TakeTable();
+        const auto& plan                 = session.Plan();
+        const auto  sections             = session.Sections();
+        const bool  incremental_textures = session.IncrementalTextures();
+        auto        next                 = rstd::move(session).TakeTable();
+        if (incremental_textures) {
+            bool same_resource_handles = true;
+            auto rollback = m_prepared.ApplyIncrementalTexturesForRollback(
+                rstd::move(next), same_resource_handles);
+            m_prepare_rollback = Some(PrepareRollback {
+                .sections              = sections,
+                .table                 = rstd::move(rollback),
+                .incremental_textures  = true,
+                .same_resource_handles = same_resource_handles,
+            });
+            if (! m_registries.States().Compile(plan, m_prepared)) {
+                AbortPreparePlan();
+                return Err(resource::ResourceError {
+                    .kind    = resource::ResourceErrorKind::BackendFailure,
+                    .message = rstd::format("compile resource state plan failed"),
+                });
+            }
+            return Ok(ResourcePrepareProgress::Complete);
+        }
         if (resource::ResourcePlanIncludes(sections, resource::ResourcePlanTextures) &&
             ! m_registries.States().Compile(plan, next)) {
             AbortPreparePlan();
@@ -171,11 +193,10 @@ public:
                 .message = rstd::format("compile resource state plan failed"),
             });
         }
-        auto previous = m_prepared.clone();
-        next.CarryForward(rstd::move(m_prepared), sections);
-        m_prepared         = rstd::move(next);
+        auto rollback = m_prepared.ReplaceSectionsForRollback(rstd::move(next), sections);
         m_prepare_rollback = Some(PrepareRollback {
-            .table = rstd::move(previous),
+            .sections = sections,
+            .table    = rstd::move(rollback),
         });
         return Ok(ResourcePrepareProgress::Complete);
     }
@@ -186,14 +207,58 @@ public:
         m_registries.TextureEntries().AbortPrepareTransaction();
         auto rollback = m_prepare_rollback.take();
         if (rollback.is_none()) return;
-        m_prepared = rstd::move(rollback->table);
+        for (usize i {}; i < rollback->inserted_pipelines.len(); ++i) {
+            (void)m_prepared.Remove(rollback->inserted_pipelines[i]);
+        }
+        for (usize i {}; i < rollback->inserted_render_passes.len(); ++i) {
+            (void)m_prepared.Remove(rollback->inserted_render_passes[i]);
+        }
+        for (usize i {}; i < rollback->inserted_framebuffers.len(); ++i) {
+            (void)m_prepared.Remove(rollback->inserted_framebuffers[i]);
+        }
+        for (usize i {}; i < rollback->inserted_descriptors.len(); ++i) {
+            (void)m_prepared.Remove(rollback->inserted_descriptors[i]);
+        }
+        for (usize i {}; i < rollback->inserted_externals.len(); ++i) {
+            (void)m_prepared.Remove(rollback->inserted_externals[i]);
+        }
+        for (usize i = rollback->updated_descriptors.len(); i > usize(); --i) {
+            auto& item = rollback->updated_descriptors[i - usize(1)];
+            (void)m_prepared.Remove(item.handle);
+            (void)m_prepared.Insert(rstd::move(item));
+        }
+        for (usize i = rollback->removed_pipelines.len(); i > usize(); --i) {
+            (void)m_prepared.Insert(rstd::move(rollback->removed_pipelines[i - usize(1)]));
+        }
+        for (usize i = rollback->removed_render_passes.len(); i > usize(); --i) {
+            (void)m_prepared.Insert(rstd::move(rollback->removed_render_passes[i - usize(1)]));
+        }
+        for (usize i = rollback->removed_framebuffers.len(); i > usize(); --i) {
+            (void)m_prepared.Insert(rstd::move(rollback->removed_framebuffers[i - usize(1)]));
+        }
+        for (usize i = rollback->removed_descriptors.len(); i > usize(); --i) {
+            (void)m_prepared.Insert(rstd::move(rollback->removed_descriptors[i - usize(1)]));
+        }
+        for (usize i = rollback->removed_externals.len(); i > usize(); --i) {
+            m_prepared.Insert(rstd::move(rollback->removed_externals[i - usize(1)]));
+        }
+        if (rollback->incremental_textures) {
+            m_prepared.RestoreIncrementalTexturesFromRollback(rstd::move(rollback->table));
+        } else {
+            m_prepared.RestoreSectionsFromRollback(rstd::move(rollback->table), rollback->sections);
+        }
     }
 
     void CommitPreparePlan() {
+        const bool skip_retain = m_prepare_rollback.is_some() &&
+                                 m_prepare_rollback->incremental_textures &&
+                                 m_prepare_rollback->same_resource_handles;
         m_prepare_rollback = None();
         m_registries.TextureEntries().CommitPrepareTransaction();
-        auto active = m_prepared.TextureResources();
-        m_registries.TextureEntries().RetainActive(active.as_slice());
+        if (! skip_retain) {
+            auto active = m_prepared.TextureResources();
+            m_registries.TextureEntries().RetainActive(active.as_slice());
+        }
     }
 
     auto Prepared() const -> const PreparedResourceTable& { return m_prepared; }
@@ -204,23 +269,43 @@ public:
                                 slice<resource::FramebufferUseHandle>    framebuffers,
                                 slice<resource::DescriptorBindingHandle> descriptors,
                                 slice<resource::ExternalUseHandle>       externals) {
-        for (usize index {}; index < pipelines.len(); ++index) m_prepared.Remove(pipelines[index]);
+        for (usize index {}; index < pipelines.len(); ++index) {
+            auto removed = m_prepared.Remove(pipelines[index]);
+            if (removed.is_some() && m_prepare_rollback.is_some()) {
+                m_prepare_rollback->removed_pipelines.push(rstd::move(*removed));
+            }
+        }
         for (usize index {}; index < render_passes.len(); ++index) {
-            m_prepared.Remove(render_passes[index]);
+            auto removed = m_prepared.Remove(render_passes[index]);
+            if (removed.is_some() && m_prepare_rollback.is_some()) {
+                m_prepare_rollback->removed_render_passes.push(rstd::move(*removed));
+            }
         }
         for (usize index {}; index < framebuffers.len(); ++index) {
-            m_prepared.Remove(framebuffers[index]);
+            auto removed = m_prepared.Remove(framebuffers[index]);
+            if (removed.is_some() && m_prepare_rollback.is_some()) {
+                m_prepare_rollback->removed_framebuffers.push(rstd::move(*removed));
+            }
         }
         for (usize index {}; index < descriptors.len(); ++index) {
-            m_prepared.Remove(descriptors[index]);
+            auto removed = m_prepared.Remove(descriptors[index]);
+            if (removed.is_some() && m_prepare_rollback.is_some()) {
+                m_prepare_rollback->removed_descriptors.push(rstd::move(*removed));
+            }
         }
         for (usize index {}; index < externals.len(); ++index) {
-            m_prepared.Remove(externals[index]);
+            auto removed = m_prepared.Remove(externals[index]);
+            if (removed.is_some() && m_prepare_rollback.is_some()) {
+                m_prepare_rollback->removed_externals.push(rstd::move(*removed));
+            }
         }
     }
 
     void RemovePreparedDescriptor(resource::DescriptorBindingHandle descriptor) {
-        m_prepared.Remove(descriptor);
+        auto removed = m_prepared.Remove(descriptor);
+        if (removed.is_some() && m_prepare_rollback.is_some()) {
+            m_prepare_rollback->removed_descriptors.push(rstd::move(*removed));
+        }
     }
 
     auto PreparePipelineLayout(const vulkan::Device& device, const PipelineLayoutRequest& request)
@@ -251,8 +336,16 @@ public:
                 .resource  = result->render_pass,
                 .cache_key = result->render_pass_key,
                 .physical  = result->render_pass_physical.clone(),
-            }) ||
-            ! m_prepared.Insert(PreparedPipeline {
+            })) {
+            return Err(resource::ResourceError {
+                .kind    = resource::ResourceErrorKind::BackendFailure,
+                .message = rstd::format("duplicate prepared graphics use"),
+            });
+        }
+        if (m_prepare_rollback.is_some()) {
+            m_prepare_rollback->inserted_render_passes.emplace_back(render_pass_use);
+        }
+        if (! m_prepared.Insert(PreparedPipeline {
                 .use         = pipeline_use,
                 .resource    = result->handle,
                 .render_pass = result->render_pass,
@@ -262,6 +355,9 @@ public:
                 .kind    = resource::ResourceErrorKind::BackendFailure,
                 .message = rstd::format("duplicate prepared graphics use"),
             });
+        }
+        if (m_prepare_rollback.is_some()) {
+            m_prepare_rollback->inserted_pipelines.emplace_back(pipeline_use);
         }
         return Ok(PipelinePreparation {
             .resource                         = result->handle,
@@ -312,6 +408,9 @@ public:
                 .message = rstd::format("duplicate prepared framebuffer use"),
             });
         }
+        if (m_prepare_rollback.is_some()) {
+            m_prepare_rollback->inserted_framebuffers.emplace_back(framebuffer_use);
+        }
         return Ok(FramebufferPreparation {
             .resource             = result->handle,
             .cache_key            = rstd::move(result->cache_key),
@@ -340,6 +439,9 @@ public:
                 .kind    = resource::ResourceErrorKind::BackendFailure,
                 .message = rstd::format("duplicate prepared render pass use"),
             });
+        }
+        if (m_prepare_rollback.is_some()) {
+            m_prepare_rollback->inserted_render_passes.emplace_back(use);
         }
         return Ok(RenderPassPreparation {
             .resource             = result->handle,
@@ -381,6 +483,9 @@ public:
                 .message = rstd::format("duplicate descriptor binding {}", handle.index),
             });
         }
+        if (m_prepare_rollback.is_some()) {
+            m_prepare_rollback->inserted_descriptors.emplace_back(handle);
+        }
         return Ok(handle);
     }
 
@@ -394,6 +499,9 @@ public:
                 .message =
                     rstd::format("prepared descriptor binding {} is unavailable", handle.index),
             });
+        }
+        if (m_prepare_rollback.is_some()) {
+            m_prepare_rollback->updated_descriptors.push((**prepared).clone());
         }
         return (**prepared).UpdateImages(images);
     }
@@ -472,7 +580,9 @@ public:
     }
     void CompleteUploadsThrough(u64 value) { m_registries.Uploads().CompleteThrough(value); }
 
-    auto BeginSubmission(vulkan::RecordedBufferUploads recorded = {}) -> resource::CompletionToken {
+    auto BeginSubmission(vulkan::RecordedBufferUploads recorded               = {},
+                         bool                          retain_prepared_leases = true)
+        -> resource::CompletionToken {
         Option<vulkan::BufferUploadBatchLease> upload_lease = None();
         if (recorded.Valid()) {
             auto lease = m_registries.BufferManager().CommitRecordedUploads(rstd::move(recorded));
@@ -480,7 +590,8 @@ public:
             m_registries.Buffers().MarkUploadsSubmitted(lease->Tickets(), None());
             upload_lease = Some(rstd::move(*lease));
         }
-        return m_registries.Submissions().Begin(m_prepared, rstd::move(upload_lease));
+        return m_registries.Submissions().Begin(
+            m_prepared, rstd::move(upload_lease), retain_prepared_leases);
     }
     auto CompleteSubmission(resource::CompletionToken token) -> Option<SubmissionLease> {
         return m_registries.Submissions().Complete(token);
@@ -501,6 +612,14 @@ public:
         auto prepared =
             m_registries.External().Prepare(capabilities, rstd::move(lease), graphics_queue_family);
         if (prepared.is_err()) return Err(rstd::move(prepared).unwrap_err_unchecked());
+        if (m_prepare_rollback.is_some()) {
+            auto existing = m_prepared.Remove(external_use);
+            if (existing.is_some()) {
+                m_prepare_rollback->removed_externals.push(rstd::move(*existing));
+            } else {
+                m_prepare_rollback->inserted_externals.emplace_back(external_use);
+            }
+        }
         m_prepared.Insert(PreparedExternalUse {
             .use   = external_use,
             .frame = rstd::move(prepared).unwrap_unchecked(),
@@ -562,7 +681,21 @@ public:
 
 private:
     struct PrepareRollback {
-        PreparedResourceTable table;
+        resource::ResourcePlanSections             sections {};
+        PreparedResourceTable                      table;
+        bool                                       incremental_textures { false };
+        bool                                       same_resource_handles { false };
+        Vec<PreparedPipeline>                      removed_pipelines;
+        Vec<PreparedRenderPass>                    removed_render_passes;
+        Vec<PreparedFramebuffer>                   removed_framebuffers;
+        Vec<PreparedDescriptorBinding>             removed_descriptors;
+        Vec<PreparedExternalUse>                   removed_externals;
+        Vec<PreparedDescriptorBinding>             updated_descriptors;
+        Vec<resource::PipelineUseHandle>           inserted_pipelines;
+        Vec<resource::RenderPassUseHandle>         inserted_render_passes;
+        Vec<resource::FramebufferUseHandle>        inserted_framebuffers;
+        Vec<resource::DescriptorBindingHandle>     inserted_descriptors;
+        Vec<resource::ExternalUseHandle>           inserted_externals;
     };
 
     ResourceRegistries      m_registries;

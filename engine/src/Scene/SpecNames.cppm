@@ -75,6 +75,10 @@ inline constexpr VertexAttrSpec PositionC1 { WE_IN_POSITIONC1, VertexType::FLOAT
 } // namespace VAttr
 
 inline bool IsSpecTex(ref<str> name) { return name.starts_with(WE_SPEC_PREFIX); }
+inline bool IsLayerCompositeShader(std::string_view shader) {
+    return shader == "genericimage" || shader == "genericimage2" || shader == "genericimage3" ||
+           shader == "genericimage4" || shader == "passthrough";
+}
 inline bool IsSpecLinkTex(ref<str> name) { return name.starts_with(SpecTex_Link); }
 inline u32  ParseLinkTex(ref<str> name) {
     auto suffix = name.strip_prefix(SpecTex_Link);

@@ -2118,6 +2118,7 @@ void SceneTextureAnimationRegistry::Advance(f64 delta) {
 
 auto SceneTextureAnimationRegistry::Frame(SceneDrawItemId draw, usize texture_index) const
     -> Option<SceneTextureFrameView> {
+    if (m_entries.is_empty()) return None();
     auto entry = m_entries.get(Key(draw));
     if (entry.is_none() || (**entry).node == nullptr) return None();
     auto binding = (**entry).bindings.get(texture_index);
@@ -2565,11 +2566,13 @@ void Scene::RebuildElidableLayerIds() {
 }
 
 void Scene::MarkLayerStaticElidable(WallpaperLayerId id) {
+    ++m_visibility_elision_epoch;
     (void)m_static_elidable_layer_ids.insert(id.value);
     (void)m_elidable_layer_ids.insert(id.value);
 }
 
 void Scene::MarkLayerVisibilityElidable(WallpaperLayerId id) {
+    ++m_visibility_elision_epoch;
     (void)m_visibility_elidable_layer_ids.insert(id.value);
     (void)m_elidable_layer_ids.insert(id.value);
 }
@@ -2625,11 +2628,16 @@ Option<WallpaperLayerId> Scene::ResolveLayerLinkSource(const SceneNode& node) co
 }
 
 bool Scene::SetNodeVisible(SceneNode& node, bool visible) {
+    const bool publishes_output = node.HasLayer() && node.Layer()->PublishesOutput();
+    if (node.m_scene_visibility_epoch == m_visibility_elision_epoch &&
+        node.m_visible_overridden && node.m_visible == visible &&
+        node.m_visibility_affects_alpha == (! publishes_output)) {
+        return false;
+    }
     auto       wallpaper            = node.WallpaperIdentity();
     const i32  id                   = wallpaper.is_some() ? wallpaper->value : i32(-1);
     const bool was_elidable         = id >= i32() && m_elidable_layer_ids.contains(id);
     const bool visibility_changed   = node.Visible() != visible;
-    const bool publishes_output     = node.HasLayer() && node.Layer()->PublishesOutput();
     node.m_visibility_affects_alpha = ! publishes_output;
     node.SetVisible(visible);
     if (publishes_output) {
@@ -2637,17 +2645,24 @@ bool Scene::SetNodeVisible(SceneNode& node, bool visible) {
     }
     if (id < i32()) {
         (void)RegisterNode(node);
+        node.m_scene_visibility_epoch = m_visibility_elision_epoch;
         return visibility_changed;
     }
 
     if (! visible) {
-        MarkLayerVisibilityElidable(WallpaperLayerId { .value = id });
+        (void)m_visibility_elidable_layer_ids.insert(id);
+        (void)m_elidable_layer_ids.insert(id);
+        node.m_scene_visibility_epoch = m_visibility_elision_epoch;
         const bool is_elidable = m_elidable_layer_ids.contains(id);
         return was_elidable != is_elidable;
     }
 
-    if (! m_visibility_elidable_layer_ids.remove(id)) return false;
+    if (! m_visibility_elidable_layer_ids.remove(id)) {
+        node.m_scene_visibility_epoch = m_visibility_elision_epoch;
+        return false;
+    }
     RebuildElidableLayerIds();
+    node.m_scene_visibility_epoch = m_visibility_elision_epoch;
     const bool is_elidable = m_elidable_layer_ids.contains(id);
     return was_elidable != is_elidable;
 }
@@ -2881,7 +2896,7 @@ Vec<SceneRenderTargetDirtyEvent> Scene::ConsumePreparedRenderTargetDirtyEvents()
     return events;
 }
 
-Vec<SceneMeshDirtyEvent> Scene::ConsumePreparedMeshDirtyEvents() {
+Vec<SceneMeshDirtyEvent> Scene::ConsumePreparedMeshDirtyEvents(bool include_data) {
     if (m_resource_index.Empty()) RebuildResourceIndex();
 
     Vec<SceneMeshDirtyEvent> events;
@@ -2897,7 +2912,7 @@ Vec<SceneMeshDirtyEvent> Scene::ConsumePreparedMeshDirtyEvents() {
         if ((flags & SceneMeshDirtyLayout) != 0) {
             consume     = SceneMeshDirtyAll;
             event_flags = SceneMeshDirtyLayout;
-        } else if (! mesh->Dynamic() && (flags & SceneMeshDirtyData) != 0) {
+        } else if (include_data && ! mesh->Dynamic() && (flags & SceneMeshDirtyData) != 0) {
             consume     = SceneMeshDirtyData;
             event_flags = SceneMeshDirtyData;
         }

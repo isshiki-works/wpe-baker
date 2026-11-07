@@ -16,17 +16,19 @@ public class SourcePackageScriptTests
         Assert.DoesNotContain("engine-upstream.bundle", Script("verify-package.ps1"));
     }
 
-    // 源码包按 DEPENDENCIES 与整个 engine/ 打包；源码绑定要覆盖同样的依赖和 engine/third_party，
-    // 否则构建后改了这些头文件，包里的源码与二进制对不上也照样判 verified-source-binding。
+    // 源码包与源码绑定必须覆盖相同依赖，避免新增已链接依赖时漏掉对应源码；
+    // engine/third_party 同样需要绑定，防止构建后改头文件仍判 verified-source-binding。
     [Fact]
-    public void NativeProvenanceCoversEverySourcePackagedDependency()
+    public void NativeProvenanceAndSourcePackageCoverTheSameDependencies()
     {
         string provenance = Script("native-provenance.py");
         static string[] Names(string text) => [.. Regex.Matches(text, "\"([a-z0-9-]+)\"").Select(m => m.Groups[1].Value)];
         string bound = Regex.Match(provenance, @"SOURCE_DEPENDENCIES = \[(.*?)\]", RegexOptions.Singleline).Groups[1].Value;
         string packaged = Regex.Match(Script("package-source.py"), @"DEPENDENCIES = \((.*?)\)", RegexOptions.Singleline).Groups[1].Value;
         Assert.NotEmpty(Names(packaged));
+        Assert.NotEmpty(Names(bound));
         Assert.Empty(Names(packaged).Except(Names(bound)));
+        Assert.Empty(Names(bound).Except(Names(packaged)));
         Assert.Contains("ROOT / \"engine/third_party\"", provenance);
     }
 }

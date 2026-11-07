@@ -1,6 +1,7 @@
 module;
 
 #include <rstd/macro.hpp>
+#include <cstring>
 module wescene.scene;
 import eigen;
 import rstd;
@@ -13,7 +14,8 @@ using namespace Eigen;
 
 namespace
 {
-Matrix4d NodeCameraFrame(SceneNode& node) {
+Matrix4d NodeCameraFrame(SceneNode& node, bool* cacheable = nullptr) {
+    if (cacheable != nullptr) *cacheable = false;
     node.UpdateTrans();
 
     Matrix4d frame = node.ModelTrans();
@@ -24,7 +26,8 @@ Matrix4d NodeCameraFrame(SceneNode& node) {
     Vector3d         y        = frame.block<3, 1>(0, 1);
     Vector3d         z        = frame.block<3, 1>(0, 2);
 
-    if (! z.allFinite() || z.squaredNorm() <= kAxisEps) {
+    const bool repair_z = ! z.allFinite() || z.squaredNorm() <= kAxisEps;
+    if (repair_z) {
         z = x.cross(y);
         if (! z.allFinite() || z.squaredNorm() <= kAxisEps) z = Vector3d::UnitZ();
         frame.block<3, 1>(0, 2) = z.normalized();
@@ -32,6 +35,7 @@ Matrix4d NodeCameraFrame(SceneNode& node) {
 
     if (! frame.allFinite() || std::abs(frame.determinant()) <= kAxisEps)
         return Matrix4d::Identity();
+    if (cacheable != nullptr) *cacheable = ! repair_z;
     return frame;
 }
 } // namespace
@@ -41,7 +45,8 @@ Vector3d SceneCamera::GetPosition(SceneRenderViewKind view) const {
     if (m_lookat) {
         position = m_eye;
     } else if (m_node) {
-        position = Affine3d(m_node->GetLocalTrans()) * Vector3d::Zero();
+        position =
+            (m_node->LocalFrame() * m_node->Translate().cast<double>().homogeneous()).head<3>();
     }
     if (view == SceneRenderViewKind::Reflection) position.y() = -position.y();
     return position;
@@ -103,18 +108,21 @@ bool SceneCamera::SetAuthoredTransforms(const SceneCameraTransforms& transforms)
     });
 }
 
-Matrix4d SceneCamera::GetViewMatrix() {
-    CalculateViewProjectionMatrix();
+const Matrix4d& SceneCamera::GetViewMatrix() {
+    CalculateViewMatrix();
     return m_viewMat;
 }
 
-Matrix4d SceneCamera::GetViewProjectionMatrix(SceneRenderViewKind view) {
+const Matrix4d& SceneCamera::GetViewProjectionMatrix(SceneRenderViewKind view) {
     if (view == SceneRenderViewKind::Reflection) return CalculateReflectionViewProjectionMatrix();
     CalculateViewProjectionMatrix();
     return m_viewProjectionMat;
 }
 
-Matrix4d SceneCamera::CalculateReflectionViewProjectionMatrix() {
+const Matrix4d& SceneCamera::CalculateReflectionViewProjectionMatrix() {
+    RefreshNodeTransform();
+    CalculateProjectionMatrix();
+    if (! m_reflection_dirty) return m_reflectionViewProjectionMat;
     Vector3d eye    = Vector3d::Zero();
     Vector3d center = -Vector3d::UnitZ();
     Vector3d up     = Vector3d::UnitY();
@@ -123,7 +131,7 @@ Matrix4d SceneCamera::CalculateReflectionViewProjectionMatrix() {
         center = m_center;
         up     = m_up;
     } else if (m_node) {
-        const Matrix4d frame = NodeCameraFrame(*m_node);
+        const Matrix4d frame = NodeCameraFrame(*m_node, &m_node_transform_valid);
         eye                  = frame.block<3, 1>(0, 3);
         center               = eye - frame.block<3, 1>(0, 2);
         up                   = frame.block<3, 1>(0, 1);
@@ -133,19 +141,25 @@ Matrix4d SceneCamera::CalculateReflectionViewProjectionMatrix() {
     // WE preserves camera-up so the reflection texture remains screen-upright.
 
     const Matrix4d view = LookAt(eye, center, up);
-    if (m_perspective) {
-        return Perspective(Radians(m_fov), m_aspect, m_nearClip, m_farClip) * view;
-    }
-    return Ortho(-m_width / 2.0,
-                 m_width / 2.0,
-                 -m_height / 2.0,
-                 m_height / 2.0,
-                 m_nearClip,
-                 m_farClip) *
-           view;
+    m_reflectionViewProjectionMat = m_projectionMat * view;
+    m_reflection_dirty = false;
+    return m_reflectionViewProjectionMat;
 }
 
-void SceneCamera::CalculateViewProjectionMatrix() {
+void SceneCamera::RefreshNodeTransform() {
+    if (m_lookat || m_node == nullptr) return;
+    m_node->UpdateTrans();
+    const Matrix4d& transform = m_node->ModelTrans();
+    if (m_node_transform_valid &&
+        std::memcmp(m_node_transform.data(), transform.data(), 16 * sizeof(double)) == 0) return;
+    m_node_transform = transform;
+    m_node_transform_valid = false;
+    InvalidateView();
+}
+
+void SceneCamera::CalculateViewMatrix() {
+    RefreshNodeTransform();
+    if (! m_view_dirty) return;
     if (m_lookat) {
         m_viewMat = LookAt(m_eye, m_center, m_up);
     } else if (m_node) {
@@ -154,20 +168,32 @@ void SceneCamera::CalculateViewProjectionMatrix() {
         // chain + local translate / scale / rotate). With LookAt-only the
         // node's local scale would leak into clip space and a 9× scaled
         // layer would only see 1/9 of its quad inside the ortho viewport.
-        m_viewMat = NodeCameraFrame(*m_node).inverse();
+        m_viewMat = NodeCameraFrame(*m_node, &m_node_transform_valid).inverse();
     } else
         m_viewMat = Matrix4d::Identity();
+    m_view_dirty = false;
+}
 
+void SceneCamera::CalculateProjectionMatrix() {
+    if (! m_projection_dirty) return;
     if (m_perspective) {
-        m_viewProjectionMat =
-            Perspective(Radians(m_fov), m_aspect, m_nearClip, m_farClip) * m_viewMat;
+        m_projectionMat = Perspective(Radians(m_fov), m_aspect, m_nearClip, m_farClip);
     } else {
         double left         = -m_width / 2.0f;
         double right        = m_width / 2.0f;
         double bottom       = -m_height / 2.0f;
         double up           = m_height / 2.0f;
-        m_viewProjectionMat = Ortho(left, right, bottom, up, m_nearClip, m_farClip) * m_viewMat;
+        m_projectionMat = Ortho(left, right, bottom, up, m_nearClip, m_farClip);
     }
+    m_projection_dirty = false;
+}
+
+void SceneCamera::CalculateViewProjectionMatrix() {
+    CalculateViewMatrix();
+    CalculateProjectionMatrix();
+    if (! m_view_projection_dirty) return;
+    m_viewProjectionMat = m_projectionMat * m_viewMat;
+    m_view_projection_dirty = false;
 }
 
 void SceneCamera::Update() { CalculateViewProjectionMatrix(); }
@@ -179,4 +205,5 @@ void SceneCamera::AttatchNode(SceneNode* node) {
     }
     m_node   = node;
     m_lookat = false; // node-based view takes over from any explicit LookAt
+    InvalidateView();
 }

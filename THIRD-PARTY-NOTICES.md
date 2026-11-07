@@ -26,6 +26,7 @@ GPL v2 第 3 条要求二进制与对应完整源码一起提供 —— 两个 z
 | glslang | `275822a6261ee689aadb1da5f09a0ec2f058685c` | 以 BSD-3-Clause 为主，含 BSD-2、MIT、Apache-2.0 | https://github.com/KhronosGroup/glslang | 否 | — | `glslang.LICENSE.txt` |
 | LZ4 | `v1.10.0` | 库部分 BSD-2-Clause（`lib/LICENSE`），仓库其余 GPL-2.0（只用库） | https://github.com/lz4/lz4 | 否 | — | `lz4.lib.LICENSE` + `lz4.LICENSE` |
 | quickjs-ng | `3c051980ab7e783dfbfb1c70c014ce5e05ecf24c` | MIT | https://github.com/quickjs-ng/quickjs | 否 | — | `quickjs-ng.LICENSE` |
+| mimalloc | `v3.5.3` (`d4881d338125e1cb7c47ba4cfb398d6f7c0c8d45`) | MIT | https://github.com/microsoft/mimalloc | 否 | — | `mimalloc.LICENSE` |
 | VulkanMemoryAllocator | `3aa921224c154a0d2c43912bc88e1c42ce1f7607` | MIT | https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator | 否 | — | `vma.LICENSE.txt` |
 | SPIRV-Reflect（hypengw fork） | `355785128c1b6ba808e3a7d0e344814fe6cff502` | Apache-2.0 | https://github.com/hypengw/SPIRV-Reflect | 否 | — | `spirv-reflect.LICENSE` |
 | CLI11（单头文件，wpe-render 命令行） | `v2.7.2`（发布件 `CLI11.hpp`，SHA256 `ffa9a30d…`，见 `scripts\native-inputs.lock.json`） | BSD-3-Clause | https://github.com/CLIUtils/CLI11 | 否 | — | `cli11.LICENSE`（取自头文件开头的许可注释） |
@@ -131,6 +132,7 @@ GPL-2.0-only 的引擎静态链接 Apache-2.0-only 的组件（SPIRV-Reflect、V
 | nlohmann-json.LICENSE.MIT | `46a65cffd1ea9551` |
 | cli11.LICENSE（2026-09-23 从 v2.7.2 头文件提取） | `a4e99505fae59bea` |
 | random.LICENSE.MIT（2026-09-27 从 1.4.1 头文件提取） | `b7bed50ec3beedf5` |
+| mimalloc.LICENSE | `82ade5d7d9b02904` |
 | rstd.LICENSE-MIT | `dc69d4de4e50e20b` |
 | rstd.LICENSE-APACHE | `cfc7749b96f63bd3` |
 | wavsen.LICENSE-MIT | `2d1edaf74e77c63e` |

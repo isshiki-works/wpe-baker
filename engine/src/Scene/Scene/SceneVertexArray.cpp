@@ -1,5 +1,6 @@
 module;
 
+#include <cstring>
 #include <rstd/macro.hpp>
 
 module wescene.scene;
@@ -62,8 +63,7 @@ SceneVertexArray::SceneVertexArray(const std::vector<SceneVertexAttribute>& attr
         m_oneSize += usize(SceneVertexArray::RealAttributeSize(el));
     }
     auto capacity = m_oneSize * count;
-    m_data        = Vec<float>::with_capacity(capacity);
-    for (usize i {}; i < capacity; ++i) m_data.push(0.0f);
+    m_data.resize(capacity, 0.0f);
 }
 
 SceneVertexArray::SceneVertexArray(SceneVertexArray&& other) noexcept
@@ -129,13 +129,21 @@ bool SceneVertexArray::SetVertex(std::string_view name, slice<float> data) noexc
 bool SceneVertexArray::SetVertexs(usize index, slice<float> data) noexcept {
     usize start = index * m_oneSize;
     if (TrySetSize(start + data.len())) {
-        for (usize source_index {}; source_index < data.len(); ++source_index) {
-            m_data[start + source_index] = data[source_index];
+        if (! data.is_empty()) {
+            std::memcpy(m_data.begin() + start.to_primitive(),
+                        data.as_raw_ptr(),
+                        data.len().to_primitive() * sizeof(float));
         }
         BumpDataGeneration();
         return true;
     }
     return false;
+}
+
+float* SceneVertexArray::MutableData(usize size) noexcept {
+    if (! TrySetSize(size)) return nullptr;
+    BumpDataGeneration();
+    return m_data.is_empty() ? nullptr : m_data.begin();
 }
 
 void SceneVertexArray::ResetSize() noexcept {

@@ -96,6 +96,8 @@ public:
         -> Option<WrittenTextureState>;
     auto writtenTexture(NodeHandle writer) const -> Option<WrittenTextureState>;
     auto readTexture(NodeHandle pass_node, TextureNodeRef texture) -> bool;
+    auto isExclusiveSnapshot(TextureNodeRef texture, NodeHandle writer,
+                             NodeHandle reader) const -> bool;
 
     auto topologicalOrder() const
         -> rstd::Result<rstd::vec::Vec<NodeHandle>, RenderGraphOrderError>;
@@ -104,6 +106,8 @@ public:
     auto resourcePlan() const -> resource::ResourcePlan;
     // 帧边界纹理：本帧先被真实 pass 读到虚拟初值、后被真实 pass 写，内容跨帧保留（帧反馈）。
     auto frameBoundaries() const -> rstd::collections::HashMap<String, bool>;
+    auto activePassesForCapture(NodeHandle capture_writer) const
+        -> rstd::collections::HashSet<NodeHandle>;
 
     void ToGraphviz(rstd::ref<rstd::str> path) const;
 

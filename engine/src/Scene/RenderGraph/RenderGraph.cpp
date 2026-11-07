@@ -182,6 +182,17 @@ auto RenderGraph::readTexture(NodeHandle pass_node, TextureNodeRef texture) -> b
     return true;
 }
 
+auto RenderGraph::isExclusiveSnapshot(TextureNodeRef texture, NodeHandle writer,
+                                      NodeHandle reader) const -> bool {
+    auto node = getTexNode(texture.handle);
+    auto producer = getPassNode(writer);
+    auto consumer = getPassNode(reader);
+    return node && producer && consumer && producer->type == PassNode::Type::Copy &&
+           consumer->type == PassNode::Type::CustomShader && node->writer.is_some() &&
+           *node->writer == writer && node->previous.is_none() && node->next.is_none() &&
+           node->readers.len() == usize(1) && node->readers[usize()] == reader;
+}
+
 auto RenderGraph::writtenTexture(ref<str> key, Option<usize> version) const
     -> Option<WrittenTextureState> {
     Option<WrittenTextureState> selected;
@@ -433,6 +444,11 @@ void RenderGraph::reusePreviousAllocation(TextureNodeRef ref) {
     rstd_assert(node.is_some());
     if (node.is_none() || node->previous.is_none()) return;
     node->allocation_parent = node->previous;
+    if (auto prev = getTexNode(*node->previous); prev.is_some()) {
+        node->allocation_family = prev->allocation_family.is_some()
+                                      ? Some(prev->allocation_family->clone())
+                                      : None<String>();
+    }
 }
 
 void RenderGraph::connectTextureRead(TextureNodeRef ref, NodeHandle pass_node) {
@@ -535,6 +551,49 @@ auto RenderGraph::frameBoundaries() const -> rstd::collections::HashMap<String, 
         }
     }
     return frame_boundaries;
+}
+
+auto RenderGraph::activePassesForCapture(NodeHandle capture_writer) const
+    -> rstd::collections::HashSet<NodeHandle> {
+    auto active = rstd::collections::HashSet<NodeHandle>::make();
+    if (! isRenderPassNode(capture_writer)) return active;
+
+    auto frame_boundaries = frameBoundaries();
+    auto visited          = rstd::collections::HashSet<NodeHandle>::make();
+    auto queue            = rstd::vec::Vec<NodeHandle>::make();
+    auto enqueue          = [&](NodeHandle handle) {
+        if (visited.contains(handle)) return;
+        (void)visited.insert(NodeHandle { handle });
+        queue.push(NodeHandle { handle });
+    };
+
+    enqueue(capture_writer);
+    for (usize cursor {}; cursor < queue.len(); ++cursor) {
+        auto handle = queue[cursor];
+        if (isRenderPassNode(handle)) (void)active.insert(NodeHandle { handle });
+
+        for (auto input : m_dg.GetNodeIn(handle)) enqueue(input);
+
+        if (isPassNode(handle)) {
+            for (auto output : m_dg.GetNodeOut(handle)) {
+                auto tex = getTexNode(output);
+                if (tex.is_some() && tex->writer.is_some() && *tex->writer == handle &&
+                    tex->previous.is_some()) {
+                    enqueue(*tex->previous);
+                }
+            }
+        } else if (auto tex = getTexNode(handle); tex.is_some()) {
+            if (tex->previous.is_some()) enqueue(*tex->previous);
+            if (frame_boundaries.contains_key(tex->key)) {
+                for (usize index {}; index < m_dg.NodeNum(); ++index) {
+                    NodeHandle candidate { .index = index };
+                    auto       other = getTexNode(candidate);
+                    if (other.is_some() && other->key == tex->key) enqueue(candidate);
+                }
+            }
+        }
+    }
+    return active;
 }
 
 auto RenderGraph::resourcePlan() const -> resource::ResourcePlan {

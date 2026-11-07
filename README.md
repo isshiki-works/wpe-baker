@@ -1,4 +1,4 @@
-# WPE Baker 2.0
+# WPE Baker 2.1
 
 English ｜ [简体中文](README.zh-CN.md)
 
@@ -8,11 +8,11 @@ Periodica analyzes animation in Wallpaper Engine scenes, coordinates its periods
 
 The output is a standalone Wallpaper Engine project. The video decoder plays the repeating animation while retained layers continue responding to live input. Analysis and generation run locally, with no wallpaper uploads or AI model calls.
 
-[Website](https://isshiki-works.github.io/wpe-baker/) · [Download 2.0.0](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.0.0)
+[Website](https://isshiki-works.github.io/wpe-baker/) · [Download 2.1.0](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.1.0)
 
 ## Measured
 
-Official Wallpaper Engine player, Intel Arc B390 laptop on AC power. Original and baked scenes alternate in A/B/B/A order, with 20 seconds sampled per segment. The table below uses Balanced precision and default wallpaper properties. Baked output is 1920×1080 at 60 FPS; originals render normally on the 3072×1920 display.
+Measured for the 2.0 release in the official Wallpaper Engine player, Intel Arc B390 laptop on AC power. Original and baked scenes alternate in A/B/B/A order, with 20 seconds sampled per segment. The table below uses Balanced precision and default wallpaper properties. Baked output is 1920×1080 at 60 FPS; originals render normally on the 3072×1920 display.
 
 | Wallpaper | Original iGPU | Baked iGPU | Change | CPU package: original → baked |
 |---|---:|---:|---:|---:|
@@ -32,6 +32,12 @@ Power savings also extend to high refresh rates. These tests use the same altern
 | Atri · 60 FPS | 8.50 W | 0.30 W | −96.5% | 16.53 → 9.33 W |
 | Atri · 165 FPS | 25.55 W | 2.19 W | −91.4% | 37.67 → 12.84 W |
 | Ayanami Rei · 120 FPS | 8.75 W | 1.97 W | −77.5% | 18.62 → 13.72 W |
+
+## 2.1 · More efficient rendering
+
+2.1 reduces repeated work in the renderer: resource updates follow actual changes, shader analysis is reused, and drawing avoids repeating state that is already active. Author scripts run through an optimized runtime, while link-time optimization improves the engine as a whole. These changes apply to shared rendering paths, preserving author scripts, animation precision and the existing analysis and generation workflow.
+
+The portable package includes the updated renderer and its runtime dependencies. The matching source archive includes the new allocator source and license, the runtime optimization profile and the exact native build records.
 
 ## 2.0 · Performance update
 
@@ -55,7 +61,7 @@ In a same-scene comparison on an RTX 5090 D v2, full 4K baking time fell from ab
 
 Requires Windows 10/11 64-bit, Wallpaper Engine from Steam and a Vulkan-capable GPU. The portable package includes its runtime dependencies; no separate .NET, Python or FFmpeg installation is needed.
 
-1. Download `WpeBaker-2.0.0-win-x64.zip` from the release page and extract the whole archive into a writable directory.
+1. Download `WpeBaker-2.1.0-win-x64.zip` from the release page and extract the whole archive into a writable directory.
 2. Open the extracted `WpeBaker` folder and run `WpeBaker.exe`.
 3. Choose the current wallpaper, or drop in a wallpaper folder or `scene.pkg`. Workshop wallpapers are usually under `steamapps\workshop\content\431960` in your Steam library.
 4. Choose animation precision, interaction, frame rate and resolution, then click **Analyze**. The plan shows what can be baked, what stays live and which settings will be used. Analyze again after changing settings.
@@ -68,7 +74,7 @@ Requires Windows 10/11 64-bit, Wallpaper Engine from Steam and a Vulkan-capable 
 - **Output:** Set the frame rate and resolution. Higher settings increase generation time and file size.
 - **Wallpaper properties:** Adjust switches, colors and other controls supplied by the author before analyzing and generating.
 
-You can also choose **Optimize live scene** to combine compatible water-wave effects while keeping the scene live, without generating video. Re-analyze plans saved by older versions with 2.0.
+You can also choose **Optimize live scene** to combine compatible water-wave effects while keeping the scene live, without generating video. Re-analyze plans saved by older versions with 2.1.
 
 ## How it works and where it helps
 
@@ -104,7 +110,7 @@ Measurement requires one display and a single wallpaper assignment, and temporar
 
 ## Source and licenses
 
-The release includes the matching `WpeBaker-2.0.0-source.zip`, with dependency sources, third-party notices and build records. Complete build instructions are in its `REBUILD.md`.
+The release includes the matching `WpeBaker-2.1.0-source.zip`, with dependency sources, third-party notices and build records. Complete build instructions are in its `REBUILD.md`.
 
 The C# application and developer scripts use the [MIT license](LICENSE). The offline renderer derives from [open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine) and uses [GPL-2.0](engine/LICENSE). See [third-party notices](THIRD-PARTY-NOTICES.md) for dependency licenses and [SOURCE.md](SOURCE.md) for corresponding source details. Wallpaper artwork belongs to its respective authors. WPE Baker is not affiliated with Wallpaper Engine.
 

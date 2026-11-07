@@ -7,6 +7,7 @@ module;
 #include <limits>
 #include <rstd/macro.hpp>
 #include "quickjs.h"
+#include "mimalloc.h"
 
 #include "JsonNlohmann.hpp"
 
@@ -35,6 +36,16 @@ namespace owe::script
 
 namespace
 {
+
+// Same allocator adapter as QuickJS's CLI. Each runtime retains these
+// callbacks; renderer buffers and the rest of the process keep their allocator.
+void* ScriptCalloc(void*, size_t count, size_t size) { return mi_calloc(count, size); }
+void* ScriptMalloc(void*, size_t size) { return mi_malloc(size); }
+void ScriptFree(void*, void* ptr) { mi_free(ptr); }
+void* ScriptRealloc(void*, void* ptr, size_t size) { return mi_realloc(ptr, size); }
+const JSMallocFunctions kScriptAllocator {
+    ScriptCalloc, ScriptMalloc, ScriptFree, ScriptRealloc, mi_usable_size
+};
 
 FieldKind GuessFieldKind(std::string_view field) {
     // Visible/enabled-style fields: bool. Several scripts return numbers
@@ -73,38 +84,30 @@ const char* KindName(FieldKind k) {
 
 bool IsFinite(double value) { return std::isfinite(value); }
 
+// Intern bridge property names once; property access still runs JS getters,
+// setters and Proxy traps on every call.
+struct BridgeAtoms {
+    JSAtom x {}, y {}, z {}, w {}, r {}, g {}, b {};
+    JSAtom this_layer {}, this_object {};
+};
+
+JSValue MakeFastVec(JSContext* ctx, double x, double y, double z, double w, int n);
+
 JSValue MakeVecValue(JSContext* ctx, double x, double y, double z, int n) {
-    JSValue global  = JS_GetGlobalObject(ctx);
-    JSValue ctor    = JS_GetPropertyStr(ctx, global, n == 2 ? "Vec2" : "Vec3");
-    JSValue argv[3] = { JS_NewFloat64(ctx, x), JS_NewFloat64(ctx, y), JS_NewFloat64(ctx, z) };
-    JSValue obj     = JS_CallConstructor(ctx, ctor, n, argv);
-    for (int i = 0; i < n; ++i) JS_FreeValue(ctx, argv[i]);
-    if (n < 3) JS_FreeValue(ctx, argv[2]);
-    JS_FreeValue(ctx, ctor);
-    JS_FreeValue(ctx, global);
-    return obj;
+    return MakeFastVec(ctx, x, y, z, 0.0, n);
 }
 
 JSValue MakeVec4Value(JSContext* ctx, double x, double y, double z, double w) {
-    JSValue global  = JS_GetGlobalObject(ctx);
-    JSValue ctor    = JS_GetPropertyStr(ctx, global, "Vec4");
-    JSValue argv[4] = {
-        JS_NewFloat64(ctx, x), JS_NewFloat64(ctx, y), JS_NewFloat64(ctx, z), JS_NewFloat64(ctx, w)
-    };
-    JSValue obj = JS_CallConstructor(ctx, ctor, 4, argv);
-    for (auto& arg : argv) JS_FreeValue(ctx, arg);
-    JS_FreeValue(ctx, ctor);
-    JS_FreeValue(ctx, global);
-    return obj;
+    return MakeFastVec(ctx, x, y, z, w, 4);
 }
 
 // JSValue→ScriptValue coercion. Mirrors the table in the API doc; never
 // throws, returns monostate for unrecognised shapes.
-ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
+ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind, const BridgeAtoms& atoms) {
     if (JS_IsUndefined(ret) || JS_IsNull(ret)) return {};
 
-    auto read_field = [&](JSValue obj, const char* name, double& out) -> bool {
-        JSValue v = JS_GetPropertyStr(ctx, obj, name);
+    auto read_field = [&](JSValue obj, JSAtom name, double& out) -> bool {
+        JSValue v = JS_GetProperty(ctx, obj, name);
         if (JS_IsUndefined(v)) {
             JS_FreeValue(ctx, v);
             return false;
@@ -150,8 +153,8 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
             read_index(ret, 0, v.x);
             read_index(ret, 1, v.y);
         } else if (JS_IsObject(ret)) {
-            read_field(ret, "x", v.x);
-            read_field(ret, "y", v.y);
+            read_field(ret, atoms.x, v.x);
+            read_field(ret, atoms.y, v.y);
         } else if (JS_IsNumber(ret)) {
             double scalar = 0.0;
             if (JS_ToFloat64(ctx, &scalar, ret) < 0 || ! IsFinite(scalar)) return {};
@@ -169,9 +172,9 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
             read_index(ret, 1, v.y);
             read_index(ret, 2, v.z);
         } else if (JS_IsObject(ret)) {
-            read_field(ret, "x", v.x);
-            read_field(ret, "y", v.y);
-            read_field(ret, "z", v.z);
+            read_field(ret, atoms.x, v.x);
+            read_field(ret, atoms.y, v.y);
+            read_field(ret, atoms.z, v.z);
         } else if (JS_IsNumber(ret)) {
             // Many audio-response scripts return a *scalar* even when bound
             // to scale (vec3). Splat into all three components.
@@ -192,10 +195,10 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
             read_index(ret, 2, v.z);
             read_index(ret, 3, v.w);
         } else if (JS_IsObject(ret)) {
-            read_field(ret, "x", v.x);
-            read_field(ret, "y", v.y);
-            read_field(ret, "z", v.z);
-            read_field(ret, "w", v.w);
+            read_field(ret, atoms.x, v.x);
+            read_field(ret, atoms.y, v.y);
+            read_field(ret, atoms.z, v.z);
+            read_field(ret, atoms.w, v.w);
         } else if (JS_IsNumber(ret)) {
             double d = 0.0;
             JS_ToFloat64(ctx, &d, ret);
@@ -213,9 +216,9 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
             read_index(ret, 1, v.g);
             read_index(ret, 2, v.b);
         } else if (JS_IsObject(ret)) {
-            read_field(ret, "r", v.r);
-            read_field(ret, "g", v.g);
-            read_field(ret, "b", v.b);
+            read_field(ret, atoms.r, v.r);
+            read_field(ret, atoms.g, v.g);
+            read_field(ret, atoms.b, v.b);
         } else {
             return {};
         }
@@ -249,6 +252,31 @@ JSValue ScriptValueToJs(JSContext* ctx, const ScriptValue& value) {
     if (auto* p = std::get_if<StringValue>(&value))
         return JS_NewStringLen(ctx, p->s.data(), p->s.size());
     return JS_UNDEFINED;
+}
+
+bool SameJsValue(JSValueConst a, JSValueConst b) noexcept {
+    return JS_VALUE_GET_TAG(a) == JS_VALUE_GET_TAG(b) &&
+           JS_VALUE_GET_PTR(a) == JS_VALUE_GET_PTR(b);
+}
+
+bool SameScriptValue(const ScriptValue& a, const ScriptValue& b) noexcept {
+    if (a.index() != b.index()) return false;
+    if (std::holds_alternative<std::monostate>(a)) return true;
+    if (auto* pa = std::get_if<ScalarValue>(&a))
+        return std::memcmp(&pa->v, &std::get<ScalarValue>(b).v, sizeof(double)) == 0;
+    if (auto* pa = std::get_if<BoolValue>(&a))
+        return pa->v == std::get<BoolValue>(b).v;
+    if (auto* pa = std::get_if<Vec2Value>(&a))
+        return std::memcmp(pa, &std::get<Vec2Value>(b), sizeof(Vec2Value)) == 0;
+    if (auto* pa = std::get_if<Vec3Value>(&a))
+        return std::memcmp(pa, &std::get<Vec3Value>(b), sizeof(Vec3Value)) == 0;
+    if (auto* pa = std::get_if<Vec4Value>(&a))
+        return std::memcmp(pa, &std::get<Vec4Value>(b), sizeof(Vec4Value)) == 0;
+    if (auto* pa = std::get_if<ColorValue>(&a))
+        return std::memcmp(pa, &std::get<ColorValue>(b), sizeof(ColorValue)) == 0;
+    if (auto* pa = std::get_if<StringValue>(&a))
+        return pa->s == std::get<StringValue>(b).s;
+    return false;
 }
 
 // JSON → JSValue conversion for the initial-value seed. Recursive but
@@ -428,6 +456,7 @@ struct AudioBufferSlot {
 
 struct EngineHostState {
     Services*                       offline { nullptr };
+    BridgeAtoms                     atoms;
     FrameInputs                     inputs;
     MediaStatus                     media;
     bool                            media_initialized { false };
@@ -439,15 +468,34 @@ struct EngineHostState {
     };
     Option<Arc<AudioResponseDemand>>      audio_response_demand;
     Option<std::unique_ptr<UniformBindingLease>> audio_response_lease;
-    // Cached `globalThis.Vec3` ctor, populated lazily on first node access.
-    // Used by the SceneNode wrapper to hand back Vec3 instances so scripts
+    // Cached `globalThis.Vec3` ctor and Vec2/3/4 prototypes, populated lazily.
+    // Used by the SceneNode wrapper to hand back Vec instances so scripts
     // can call `.add` / `.subtract` on `thisLayer.origin`.
     JSValue vec3_ctor { JS_UNDEFINED };
+    JSValue vec2_proto { JS_UNDEFINED };
+    JSValue vec3_proto { JS_UNDEFINED };
+    JSValue vec4_proto { JS_UNDEFINED };
+    std::unordered_map<owe::SceneNode*, JSValue> layer_wrappers;
+    struct StringViewHash {
+        using is_transparent = void;
+        size_t operator()(std::string_view sv) const noexcept {
+            return std::hash<std::string_view> {}(sv);
+        }
+        size_t operator()(const std::string& s) const noexcept {
+            return std::hash<std::string_view> {}(s);
+        }
+    };
+    std::unordered_map<std::string, JSValue, StringViewHash, std::equal_to<>> root_layer_cache;
+    std::uint64_t root_layer_cache_epoch { 0 };
     // The original JS-side `thisLayer` / `thisScene` stubs, captured at
     // bootstrap. Per-script binding restores them when a script has no
     // backing SceneNode.
     JSValue default_layer { JS_UNDEFINED };
     JSValue default_scene { JS_UNDEFINED };
+    bool        has_synced_inputs { false };
+    FrameInputs last_synced_inputs {};
+    double      last_synced_world_x { 0.0 };
+    double      last_synced_world_y { 0.0 };
     // engine.setTimeout / setInterval queue. Swept once per frame in
     // JsRuntime::TickAll before the script update loop runs.
     std::vector<DeferredCb> deferred;
@@ -495,6 +543,15 @@ struct EngineHostState {
     };
     HashMap<owe::SceneNode*, ImageAlignmentHook> image_alignment_hooks;
     HashMap<owe::SceneNode*, NJson>              initial_layer_configs;
+    struct AnimationLayerBinding {
+        owe::SceneNode* node;
+        Arc<owe::PuppetLayer> layer;
+        rstd::int32_t layer_id;
+        String name;
+        float blend_base;
+        Option<owe::SceneAnimationTrack> blend_track;
+    };
+    std::vector<AnimationLayerBinding> animation_layers;
     std::vector<owe::SceneNode*>                  public_layers;
     JsRuntime::BoneIndexResolver                 bone_index_resolver;
     JsRuntime::BoneTransformResolver             bone_transform_resolver;
@@ -541,6 +598,12 @@ struct FieldScript::Impl {
     bool             capture_init_return { false };
     std::uint64_t    binding_id { 0 };
     std::uint64_t    initialization_order { 0 };
+    double          profile_update_ms {};
+    unsigned long long profile_update_calls {};
+    struct GetLayerCosts {
+        unsigned long long calls {}, hits {}, misses {};
+        double lookup_ms {}, remainder_ms {};
+    } profile_get_layer;
     JSValue          current_value {
         JS_UNDEFINED
     }; // last `value` returned, kept as JSValue for the (value)-arg form
@@ -629,6 +692,22 @@ struct JsRuntime::Impl {
     JSRuntime*      rt { nullptr };
     JSContext*      ctx { nullptr };
     EngineHostState host;
+    struct ScriptCosts {
+        struct Phase {
+            double ms {};
+            unsigned long long calls {};
+            double Add(std::chrono::steady_clock::time_point started) {
+                const double elapsed = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - started).count();
+                ms += elapsed;
+                ++calls;
+                return elapsed;
+            }
+        };
+        bool enabled { false };
+        unsigned frames {};
+        Phase bind, call, coerce, rebuild;
+    } script_costs;
     // Compiled-module dedup: same script source under the same sha is
     // imported once per runtime, exposing one shared namespace. A
     // FieldScript holds a JS_DupValue of the namespace.
@@ -743,23 +822,48 @@ void TraceDependency(JSContext* ctx, std::string_view operation, std::string_vie
         script == nullptr || !script->init_done });
 }
 
-JSValue MakeVec2Value(JSContext* ctx, double x, double y) {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue ctor   = JS_GetPropertyStr(ctx, global, "Vec2");
-    JS_FreeValue(ctx, global);
-    if (! JS_IsFunction(ctx, ctor)) {
-        JS_FreeValue(ctx, ctor);
-        JSValue v = JS_NewObject(ctx);
-        JS_DefinePropertyValueStr(ctx, v, "x", JS_NewFloat64(ctx, x), JS_PROP_C_W_E);
-        JS_DefinePropertyValueStr(ctx, v, "y", JS_NewFloat64(ctx, y), JS_PROP_C_W_E);
-        return v;
+JSValue MakeFastVec(JSContext* ctx, double x, double y, double z, double w, int n) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (host != nullptr) {
+        JSValue* proto_slot = n == 2 ? &host->vec2_proto
+                            : n == 4 ? &host->vec4_proto
+                                     : &host->vec3_proto;
+        if (JS_IsUndefined(*proto_slot)) {
+            const char* ctor_name = n == 2 ? "Vec2" : (n == 4 ? "Vec4" : "Vec3");
+            JSValue     g         = JS_GetGlobalObject(ctx);
+            JSValue     ctor      = JS_GetPropertyStr(ctx, g, ctor_name);
+            JS_FreeValue(ctx, g);
+            if (JS_IsObject(ctor)) {
+                *proto_slot = JS_GetPropertyStr(ctx, ctor, "prototype");
+            }
+            JS_FreeValue(ctx, ctor);
+        }
+        if (JS_IsObject(*proto_slot)) {
+            JSValue obj = JS_NewObjectProto(ctx, *proto_slot);
+            if (JS_IsException(obj)) return obj;
+            JS_DefinePropertyValue(ctx, obj, host->atoms.x, JS_NewFloat64(ctx, x), JS_PROP_C_W_E);
+            JS_DefinePropertyValue(ctx, obj, host->atoms.y, JS_NewFloat64(ctx, y), JS_PROP_C_W_E);
+            if (n >= 3) {
+                JS_DefinePropertyValue(
+                    ctx, obj, host->atoms.z, JS_NewFloat64(ctx, z), JS_PROP_C_W_E);
+            }
+            if (n >= 4) {
+                JS_DefinePropertyValue(
+                    ctx, obj, host->atoms.w, JS_NewFloat64(ctx, w), JS_PROP_C_W_E);
+            }
+            return obj;
+        }
     }
-    JSValue args[2] { JS_NewFloat64(ctx, x), JS_NewFloat64(ctx, y) };
-    JSValue out = JS_CallConstructor(ctx, ctor, 2, args);
-    JS_FreeValue(ctx, args[0]);
-    JS_FreeValue(ctx, args[1]);
-    JS_FreeValue(ctx, ctor);
-    return out;
+    JSValue obj = JS_NewObject(ctx);
+    JS_DefinePropertyValueStr(ctx, obj, "x", JS_NewFloat64(ctx, x), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, obj, "y", JS_NewFloat64(ctx, y), JS_PROP_C_W_E);
+    if (n >= 3) JS_DefinePropertyValueStr(ctx, obj, "z", JS_NewFloat64(ctx, z), JS_PROP_C_W_E);
+    if (n >= 4) JS_DefinePropertyValueStr(ctx, obj, "w", JS_NewFloat64(ctx, w), JS_PROP_C_W_E);
+    return obj;
+}
+
+JSValue MakeVec2Value(JSContext* ctx, double x, double y) {
+    return MakeFastVec(ctx, x, y, 0.0, 0.0, 2);
 }
 
 JSValue EngineGetterFrametime(JSContext* ctx, JSValueConst /*this_val*/, int /*argc*/,
@@ -1057,10 +1161,28 @@ void SetVec3Fields(JSContext* ctx, JSValueConst obj, double x, double y, double 
 }
 
 void UpdateInputObject(JSContext* ctx) {
-    auto*       host  = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    const auto& fi    = host->inputs;
-    JSValue     g     = JS_GetGlobalObject(ctx);
-    JSValue     input = JS_GetPropertyStr(ctx, g, "input");
+    auto*             host  = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    const auto&       fi    = host->inputs;
+    const CursorWorld world = CursorToWorld(fi);
+    if (host->has_synced_inputs) {
+        const auto& prev = host->last_synced_inputs;
+        if (fi.cursor_x == prev.cursor_x && fi.cursor_y == prev.cursor_y &&
+            fi.screen_w == prev.screen_w && fi.screen_h == prev.screen_h &&
+            fi.mouse_buttons_down == prev.mouse_buttons_down &&
+            fi.mouse_buttons_pressed == prev.mouse_buttons_pressed &&
+            fi.mouse_buttons_released == prev.mouse_buttons_released &&
+            fi.cursor_in_window == prev.cursor_in_window &&
+            world.x == host->last_synced_world_x && world.y == host->last_synced_world_y) {
+            return;
+        }
+    }
+    host->has_synced_inputs   = true;
+    host->last_synced_inputs  = fi;
+    host->last_synced_world_x = world.x;
+    host->last_synced_world_y = world.y;
+
+    JSValue g     = JS_GetGlobalObject(ctx);
+    JSValue input = JS_GetPropertyStr(ctx, g, "input");
     if (! JS_IsObject(input)) {
         JS_FreeValue(ctx, input);
         JS_FreeValue(ctx, g);
@@ -1072,8 +1194,7 @@ void UpdateInputObject(JSContext* ctx) {
         SetVec2Fields(ctx, screen, fi.cursor_x * fi.screen_w, fi.cursor_y * fi.screen_h);
     JS_FreeValue(ctx, screen);
 
-    const CursorWorld world = CursorToWorld(fi);
-    JSValue           wp    = JS_GetPropertyStr(ctx, input, "cursorWorldPosition");
+    JSValue wp = JS_GetPropertyStr(ctx, input, "cursorWorldPosition");
     if (JS_IsObject(wp)) SetVec3Fields(ctx, wp, world.x, world.y, 0.0);
     JS_FreeValue(ctx, wp);
 
@@ -1423,19 +1544,30 @@ globalThis.createScriptProperties = function () {
     // wallpapers (e.g. workshop 3327063360) wire `min:-1,max:1` sliders
     // into scripts declaring `min:0,max:1` and rely on the negative
     // values reaching the formula to shift origin off-parent.
-    for (const d of _props) {
-      if (d && d.name) {
-        Object.defineProperty(target, d.name, {
-          enumerable: true,
-          configurable: true,
-          get() {
-            if (Object.prototype.hasOwnProperty.call(_hostValues, d.name))
-              return coerceDescriptorValue(d, unwrapUserProp(_hostValues[d.name]));
-            return d.value;
-          },
-        });
+    target.__refreshHostValues = function () {
+      for (const d of _props) {
+        if (!d || !d.name) continue;
+        const resolved = Object.prototype.hasOwnProperty.call(_hostValues, d.name)
+          ? coerceDescriptorValue(d, unwrapUserProp(_hostValues[d.name]))
+          : d.value;
+        if (d.kind === 'Color' && resolved instanceof globalThis.Vec3) {
+          const cx = resolved.x, cy = resolved.y, cz = resolved.z;
+          Object.defineProperty(target, d.name, {
+            enumerable: true,
+            configurable: true,
+            get() { return new globalThis.Vec3(cx, cy, cz); },
+          });
+        } else {
+          Object.defineProperty(target, d.name, {
+            value: resolved,
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          });
+        }
       }
-    }
+    };
+    target.__refreshHostValues();
     target.__descriptors = _props;
     target.__hostValues  = _hostValues;
     return target;
@@ -1944,6 +2076,7 @@ struct LayerHandle {
 struct AnimationLayerHandle {
     Arc<owe::PuppetLayer> layer;
     rstd::int32_t         layer_id { 0 };
+    owe::SceneNode*       node { nullptr };
 };
 
 owe::SceneNode* ResolveLayerNode(LayerHandle* h) {
@@ -1976,11 +2109,14 @@ struct EffectHandle {
     EngineHostState*            host { nullptr };
     Option<SceneImageEffectRef> ref;
     bool                        fallback_visible { true };
+    owe::SceneNode*             node { nullptr };
 };
 
 struct MaterialHandle {
     EngineHostState* host { nullptr };
     SceneMaterial*   material { nullptr };
+    owe::SceneNode*   node { nullptr };
+    Option<Arc<owe::SceneAnimationPlayback>> property_animation;
 };
 
 int MaterialSetProperty(JSContext* ctx, JSValueConst obj, JSAtom atom, JSValueConst value,
@@ -2022,20 +2158,30 @@ inline owe::SceneNode* GetLayerNode(JSValueConst value) {
 }
 
 JSValue WrapLayerNode(JSContext* ctx, owe::SceneNode* node, bool property_object = false) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (! property_object && node != nullptr && host != nullptr) {
+        auto it = host->layer_wrappers.find(node);
+        if (it != host->layer_wrappers.end()) {
+            return JS_DupValue(ctx, it->second);
+        }
+    }
     JSValue obj = JS_NewObjectClass(ctx, s_layer_class_id);
     if (JS_IsException(obj)) return obj;
-    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     JS_SetOpaque(
         obj, new LayerHandle { .host = host, .node = node, .property_object = property_object });
+    if (! property_object && node != nullptr && host != nullptr) {
+        host->layer_wrappers.emplace(node, JS_DupValue(ctx, obj));
+    }
     return obj;
 }
 
 JSValue WrapAnimationLayer(JSContext* ctx, Arc<owe::PuppetLayer> layer,
-                           rstd::int32_t layer_id) {
+                           rstd::int32_t layer_id, owe::SceneNode* node) {
     JSValue object = JS_NewObjectClass(ctx, s_animation_layer_class_id);
     if (JS_IsException(object)) return object;
     JS_SetOpaque(object,
-                 new AnimationLayerHandle { .layer = rstd::move(layer), .layer_id = layer_id });
+                 new AnimationLayerHandle {
+                     .layer = rstd::move(layer), .layer_id = layer_id, .node = node });
     return object;
 }
 
@@ -2098,21 +2244,26 @@ EffectHandle* GetEffectHandle(JSValueConst v) {
     return static_cast<EffectHandle*>(JS_GetOpaque(v, s_effect_class_id));
 }
 
-JSValue WrapEffect(JSContext* ctx, Option<SceneImageEffectRef> ref) {
+JSValue WrapEffect(JSContext* ctx, Option<SceneImageEffectRef> ref,
+                   owe::SceneNode* node = nullptr) {
     JSValue obj = JS_NewObjectClass(ctx, s_effect_class_id);
     if (JS_IsException(obj)) return obj;
     auto* host   = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     bool visible = host && host->scene && ref ? host->scene->ImageEffectRuntimeVisible(*ref) : true;
     JS_SetOpaque(
-        obj, new EffectHandle { .host = host, .ref = std::move(ref), .fallback_visible = visible });
+        obj, new EffectHandle {
+            .host = host, .ref = std::move(ref), .fallback_visible = visible, .node = node });
     return obj;
 }
 
-JSValue WrapMaterial(JSContext* ctx, SceneMaterial* material) {
+JSValue WrapMaterial(JSContext* ctx, SceneMaterial* material, owe::SceneNode* node = nullptr,
+                     Option<Arc<owe::SceneAnimationPlayback>> property_animation = None()) {
     JSValue obj = JS_NewObjectClass(ctx, s_material_class_id);
     if (JS_IsException(obj)) return obj;
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    JS_SetOpaque(obj, new MaterialHandle { .host = host, .material = material });
+    JS_SetOpaque(obj, new MaterialHandle {
+        .host = host, .material = material, .node = node,
+        .property_animation = rstd::move(property_animation) });
     return obj;
 }
 
@@ -2136,31 +2287,17 @@ JSValue EffectSetVisible(JSContext* ctx, JSValueConst this_val, JSValueConst val
 }
 
 inline JSValue MakeVec3(JSContext* ctx, double x, double y, double z) {
-    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    if (JS_IsUndefined(host->vec3_ctor)) {
-        JSValue g       = JS_GetGlobalObject(ctx);
-        host->vec3_ctor = JS_GetPropertyStr(ctx, g, "Vec3");
-        JS_FreeValue(ctx, g);
-    }
-    JSValue args[3] {
-        JS_NewFloat64(ctx, x),
-        JS_NewFloat64(ctx, y),
-        JS_NewFloat64(ctx, z),
-    };
-    JSValue r = JS_CallConstructor(ctx, host->vec3_ctor, 3, args);
-    JS_FreeValue(ctx, args[0]);
-    JS_FreeValue(ctx, args[1]);
-    JS_FreeValue(ctx, args[2]);
-    return r;
+    return MakeFastVec(ctx, x, y, z, 0.0, 3);
 }
 
 inline bool ReadXYZ(JSContext* ctx, JSValueConst v, double& x, double& y, double& z) {
     if (! JS_IsObject(v)) return false;
-    JSValue jx = JS_GetPropertyStr(ctx, v, "x");
-    JSValue jy = JS_GetPropertyStr(ctx, v, "y");
-    JSValue jz = JS_GetPropertyStr(ctx, v, "z");
-    bool    ok = (JS_ToFloat64(ctx, &x, jx) == 0) && (JS_ToFloat64(ctx, &y, jy) == 0) &&
-                 (JS_ToFloat64(ctx, &z, jz) == 0);
+    auto*   host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    JSValue jx   = host ? JS_GetProperty(ctx, v, host->atoms.x) : JS_GetPropertyStr(ctx, v, "x");
+    JSValue jy   = host ? JS_GetProperty(ctx, v, host->atoms.y) : JS_GetPropertyStr(ctx, v, "y");
+    JSValue jz   = host ? JS_GetProperty(ctx, v, host->atoms.z) : JS_GetPropertyStr(ctx, v, "z");
+    bool    ok   = (JS_ToFloat64(ctx, &x, jx) == 0) && (JS_ToFloat64(ctx, &y, jy) == 0) &&
+                   (JS_ToFloat64(ctx, &z, jz) == 0);
     JS_FreeValue(ctx, jx);
     JS_FreeValue(ctx, jy);
     JS_FreeValue(ctx, jz);
@@ -2169,9 +2306,12 @@ inline bool ReadXYZ(JSContext* ctx, JSValueConst v, double& x, double& y, double
 
 inline bool ReadXY(JSContext* ctx, JSValueConst value, double& x, double& y) {
     if (! JS_IsObject(value)) return false;
-    JSValue    js_x = JS_GetPropertyStr(ctx, value, "x");
-    JSValue    js_y = JS_GetPropertyStr(ctx, value, "y");
-    const bool ok   = JS_ToFloat64(ctx, &x, js_x) == 0 && JS_ToFloat64(ctx, &y, js_y) == 0;
+    auto*   host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    JSValue js_x =
+        host ? JS_GetProperty(ctx, value, host->atoms.x) : JS_GetPropertyStr(ctx, value, "x");
+    JSValue js_y =
+        host ? JS_GetProperty(ctx, value, host->atoms.y) : JS_GetPropertyStr(ctx, value, "y");
+    const bool ok = JS_ToFloat64(ctx, &x, js_x) == 0 && JS_ToFloat64(ctx, &y, js_y) == 0;
     JS_FreeValue(ctx, js_x);
     JS_FreeValue(ctx, js_y);
     return ok;
@@ -2186,20 +2326,39 @@ Option<ShaderValue> ReadShaderValue(JSContext* ctx, JSValueConst value) {
     if (JS_IsBool(value)) return Some(ShaderValue(JS_ToBool(ctx, value) != 0 ? 1.0f : 0.0f));
     if (! JS_IsObject(value)) return None();
 
-    constexpr rstd::array<const char*, 4> fields { "x", "y", "z", "w" };
-    rstd::array<float, 4>                 values {};
-    usize                                 count {};
-    for (const char* field : fields) {
-        JSValue component = JS_GetPropertyStr(ctx, value, field);
-        if (JS_IsUndefined(component)) {
+    auto*                 host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    rstd::array<float, 4> values {};
+    usize                 count {};
+    if (host != nullptr) {
+        const JSAtom atom_fields[4] {
+            host->atoms.x, host->atoms.y, host->atoms.z, host->atoms.w
+        };
+        for (JSAtom field : atom_fields) {
+            JSValue component = JS_GetProperty(ctx, value, field);
+            if (JS_IsUndefined(component)) {
+                JS_FreeValue(ctx, component);
+                break;
+            }
+            double     number {};
+            const bool ok = JS_ToFloat64(ctx, &number, component) == 0;
             JS_FreeValue(ctx, component);
-            break;
+            if (! ok) return None();
+            values[count++] = static_cast<float>(number);
         }
-        double     number {};
-        const bool ok = JS_ToFloat64(ctx, &number, component) == 0;
-        JS_FreeValue(ctx, component);
-        if (! ok) return None();
-        values[count++] = static_cast<float>(number);
+    } else {
+        constexpr rstd::array<const char*, 4> fields { "x", "y", "z", "w" };
+        for (const char* field : fields) {
+            JSValue component = JS_GetPropertyStr(ctx, value, field);
+            if (JS_IsUndefined(component)) {
+                JS_FreeValue(ctx, component);
+                break;
+            }
+            double     number {};
+            const bool ok = JS_ToFloat64(ctx, &number, component) == 0;
+            JS_FreeValue(ctx, component);
+            if (! ok) return None();
+            values[count++] = static_cast<float>(number);
+        }
     }
     if (count == usize()) return None();
     return Some(ShaderValue(values.data(), count));
@@ -2224,11 +2383,11 @@ int MaterialSetProperty(JSContext* ctx, JSValueConst obj, JSAtom atom, JSValueCo
 // --- property accessors -----------------------------------------------------
 
 JSValue NodeGetOrigin(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "origin", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "origin", n);
     if (! n) return MakeVec3(ctx, 0, 0, 0);
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    if (host != nullptr) {
+    if (host != nullptr && ! host->node_origin_hooks.is_empty()) {
         auto hook = host->node_origin_hooks.get_mut(n);
         if (hook.is_some()) {
             const auto origin = (*(**hook).getter)();
@@ -2239,13 +2398,13 @@ JSValue NodeGetOrigin(JSContext* ctx, JSValueConst this_val) {
     return MakeVec3(ctx, v.x(), v.y(), v.z());
 }
 JSValue NodeSetOrigin(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    TraceDependency(ctx, "write", "origin", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "origin", n);
     if (! n) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
     if (! ReadXYZ(ctx, val, x, y, z)) return JS_UNDEFINED;
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    if (host != nullptr) {
+    if (host != nullptr && ! host->node_origin_hooks.is_empty()) {
         auto hook = host->node_origin_hooks.get_mut(n);
         if (hook.is_some()) {
             (*(**hook).setter)(Vec3Value { .x = x, .y = y, .z = z });
@@ -2256,15 +2415,15 @@ JSValue NodeSetOrigin(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     return JS_UNDEFINED;
 }
 JSValue NodeGetScale(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "scale", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "scale", n);
     if (! n) return MakeVec3(ctx, 1, 1, 1);
     auto v = n->Scale();
     return MakeVec3(ctx, v.x(), v.y(), v.z());
 }
 JSValue NodeSetScale(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    TraceDependency(ctx, "write", "scale", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "scale", n);
     if (! n) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
     if (! ReadXYZ(ctx, val, x, y, z)) return JS_UNDEFINED;
@@ -2275,15 +2434,15 @@ JSValue NodeSetScale(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
 constexpr double kRadToDeg = 180.0 / rstd::f64::consts::PI.to_primitive();
 constexpr double kDegToRad = rstd::f64::consts::PI.to_primitive() / 180.0;
 JSValue          NodeGetAngles(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "angles", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "angles", n);
     if (! n) return MakeVec3(ctx, 0, 0, 0);
     auto v = n->Rotation();
     return MakeVec3(ctx, v.x() * kRadToDeg, v.y() * kRadToDeg, v.z() * kRadToDeg);
 }
 JSValue NodeSetAngles(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    TraceDependency(ctx, "write", "angles", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "angles", n);
     if (! n) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
     if (! ReadXYZ(ctx, val, x, y, z)) return JS_UNDEFINED;
@@ -2292,8 +2451,8 @@ JSValue NodeSetAngles(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
 }
 
 JSValue NodeGetParallaxDepth(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "parallaxDepth", GetLayerNode(this_val));
     auto* node = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "parallaxDepth", node);
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     if (node == nullptr || host == nullptr || host->node_parallax_depth_getter.is_none())
         return MakeVec2Value(ctx, 0.0, 0.0);
@@ -2303,8 +2462,8 @@ JSValue NodeGetParallaxDepth(JSContext* ctx, JSValueConst this_val) {
 }
 
 JSValue NodeSetParallaxDepth(JSContext* ctx, JSValueConst this_val, JSValueConst value) {
-    TraceDependency(ctx, "write", "parallaxDepth", GetLayerNode(this_val));
     auto* node = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "parallaxDepth", node);
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     if (node == nullptr || host == nullptr || host->node_parallax_depth_setter.is_none())
         return JS_UNDEFINED;
@@ -2317,8 +2476,8 @@ JSValue NodeSetParallaxDepth(JSContext* ctx, JSValueConst this_val, JSValueConst
 
 // Stubs — properties scripts read but writing them would force RG rebuild.
 JSValue NodeGetSize(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "size", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "size", n);
     if (! n) return MakeVec3(ctx, 100, 100, 0);
     const auto& s = n->Size();
     // Zero is the parser's "unknown" sentinel (particle/light nodes never
@@ -2327,13 +2486,13 @@ JSValue NodeGetSize(JSContext* ctx, JSValueConst this_val) {
     return MakeVec3(ctx, s.x(), s.y(), 0);
 }
 JSValue NodeGetVisible(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "visible", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "visible", n);
     return JS_NewBool(ctx, n ? n->Visible() : true);
 }
 JSValue NodeSetVisible(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    TraceDependency(ctx, "write", "visible", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "visible", n);
     if (! n) return JS_UNDEFINED;
     const bool visible = JS_ToBool(ctx, val) != 0;
     auto*      host    = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
@@ -2344,13 +2503,13 @@ JSValue NodeSetVisible(JSContext* ctx, JSValueConst this_val, JSValueConst val) 
     return JS_UNDEFINED;
 }
 JSValue NodeGetAlpha(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "alpha", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "alpha", n);
     return JS_NewFloat64(ctx, n ? n->UserAlpha() : 1.0);
 }
 JSValue NodeSetAlpha(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    TraceDependency(ctx, "write", "alpha", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "alpha", n);
     if (! n) return JS_UNDEFINED;
     double a = 1.0;
     JS_ToFloat64(ctx, &a, val);
@@ -2358,13 +2517,13 @@ JSValue NodeSetAlpha(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     return JS_UNDEFINED;
 }
 JSValue NodeGetBrightness(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "brightness", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "brightness", n);
     return JS_NewFloat64(ctx, n ? n->Brightness() : 1.0);
 }
 JSValue NodeSetBrightness(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    TraceDependency(ctx, "write", "brightness", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "brightness", n);
     if (! n) return JS_UNDEFINED;
     double b = 1.0;
     JS_ToFloat64(ctx, &b, val);
@@ -2372,15 +2531,15 @@ JSValue NodeSetBrightness(JSContext* ctx, JSValueConst this_val, JSValueConst va
     return JS_UNDEFINED;
 }
 JSValue NodeGetColor(JSContext* ctx, JSValueConst this_val) {
-    TraceDependency(ctx, "read", "color", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "read", "color", n);
     if (! n) return MakeVec3(ctx, 1, 1, 1);
     const auto& c = n->Color();
     return MakeVec3(ctx, c.x(), c.y(), c.z());
 }
 JSValue NodeSetColor(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    TraceDependency(ctx, "write", "color", GetLayerNode(this_val));
     auto* n = GetLayerNode(this_val);
+    TraceDependency(ctx, "write", "color", n);
     if (! n) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
     if (! ReadXYZ(ctx, val, x, y, z)) return JS_UNDEFINED;
@@ -2710,6 +2869,15 @@ JSValue NodeGetName(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     return NodeGetNameValue(ctx, this_val);
 }
 
+void ClearRootLayerCache(JSContext* ctx, EngineHostState& host) {
+    if (ctx != nullptr) {
+        for (auto& [_name, val] : host.root_layer_cache) {
+            JS_FreeValue(ctx, val);
+        }
+    }
+    host.root_layer_cache.clear();
+}
+
 JSValue NodeGetLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     auto* n    = GetLayerNode(this_val);
@@ -2726,13 +2894,59 @@ JSValue NodeGetLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
     }
     const char* name = JS_ToCString(ctx, argv[0]);
     if (! name) return JS_DupValue(ctx, host->default_layer);
-    std::string     layer_name { name };
+    std::string_view layer_name { name };
+    FieldScript::Impl::GetLayerCosts* probe = nullptr;
+    if (auto* active = host->active_field_script;
+        active && active->m_impl->rt->script_costs.enabled) {
+        probe = &active->m_impl->profile_get_layer;
+    }
+    if (host && n && n == host->scene_root &&
+        (! host->offline || ! host->offline->trace_scene)) {
+        const auto epoch = owe::SceneNode::CurrentTreeEpoch().to_primitive();
+        if (host->root_layer_cache_epoch != epoch) {
+            ClearRootLayerCache(ctx, *host);
+            host->root_layer_cache_epoch = epoch;
+        }
+        auto it = host->root_layer_cache.find(layer_name);
+        if (it != host->root_layer_cache.end()) {
+            JS_FreeCString(ctx, name);
+            return JS_DupValue(ctx, it->second);
+        }
+        owe::SceneNode* hit    = n->FindByName(layer_name);
+        JSValue         result = hit ? WrapLayerNode(ctx, hit) : JS_NULL;
+        host->root_layer_cache.emplace(std::string(layer_name), JS_DupValue(ctx, result));
+        JS_FreeCString(ctx, name);
+        return result;
+    }
+    std::chrono::steady_clock::time_point lookup_started, lookup_finished;
+    if (probe) lookup_started = std::chrono::steady_clock::now();
     owe::SceneNode* hit = n ? n->FindByName(layer_name) : nullptr;
+    if (probe) lookup_finished = std::chrono::steady_clock::now();
     TraceDependency(ctx, "lookup", layer_name, hit);
-    JS_FreeCString(ctx, name);
-    if (hit) return WrapLayerNode(ctx, hit);
-    if (host && host->scene_root) return JS_NULL;
-    return WrapLayerName(ctx, std::move(layer_name));
+    JSValue result;
+    if (hit) {
+        JS_FreeCString(ctx, name);
+        result = WrapLayerNode(ctx, hit);
+    } else if (host && host->scene_root) {
+        JS_FreeCString(ctx, name);
+        result = JS_NULL;
+    } else {
+        std::string owned_name { layer_name };
+        JS_FreeCString(ctx, name);
+        result = WrapLayerName(ctx, std::move(owned_name));
+    }
+    if (probe) {
+        const auto finished = std::chrono::steady_clock::now();
+        ++probe->calls;
+        if (hit) ++probe->hits;
+        else ++probe->misses;
+        probe->lookup_ms += std::chrono::duration<double, std::milli>(
+            lookup_finished - lookup_started).count();
+        // Only the post-lookup bridge work: tracing, CString release and wrapping.
+        probe->remainder_ms += std::chrono::duration<double, std::milli>(
+            finished - lookup_finished).count();
+    }
+    return result;
 }
 
 JSValue NodeGetEffect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -2744,14 +2958,14 @@ JSValue NodeGetEffect(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
     if (JS_IsNumber(argv[0])) {
         int64_t index {};
         if (JS_ToInt64(ctx, &index, argv[0]) != 0 || index < 0) return WrapEffect(ctx, None());
-        return WrapEffect(ctx, host->scene->FindNodeImageEffect(*n, usize(index)));
+        return WrapEffect(ctx, host->scene->FindNodeImageEffect(*n, usize(index)), n);
     }
 
     const char* name = JS_ToCString(ctx, argv[0]);
     if (! name) return WrapEffect(ctx, None());
     auto effect = host->scene->FindNodeImageEffect(*n, name);
     JS_FreeCString(ctx, name);
-    return WrapEffect(ctx, std::move(effect));
+    return WrapEffect(ctx, std::move(effect), n);
 }
 
 JSValue NodeGetEffectCount(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
@@ -2778,7 +2992,8 @@ JSValue EffectGetMaterial(JSContext* ctx, JSValueConst this_val, int argc, JSVal
         return WrapMaterial(ctx, nullptr);
     int64_t index {};
     if (JS_ToInt64(ctx, &index, argv[0]) != 0 || index < 0) return WrapMaterial(ctx, nullptr);
-    return WrapMaterial(ctx, handle->host->scene->ImageEffectMaterial(*handle->ref, usize(index)));
+    return WrapMaterial(ctx, handle->host->scene->ImageEffectMaterial(*handle->ref, usize(index)),
+                          handle->node);
 }
 
 JSValue NodeSceneLayerListIncludes(JSContext* ctx, JSValueConst, int argc,
@@ -3285,11 +3500,16 @@ JSClassDef s_animation_class_def {
 };
 
 owe::SceneAnimationPlayback* GetAnimationPlayback(JSValueConst value) {
+    if (auto* layer = GetAnimationLayerHandle(value)) {
+        auto playback = layer->layer->AnimationPlayback(layer->layer_id);
+        return playback.is_some() ? (*playback).as_ptr().as_raw_ptr() : nullptr;
+    }
     auto* handle = static_cast<AnimationHandle*>(JS_GetOpaque(value, s_animation_class_id));
     return handle != nullptr ? handle->playback.as_ptr().as_raw_ptr() : nullptr;
 }
 
 owe::SceneNode* GetAnimationNode(JSValueConst value) {
+    if (auto* layer = GetAnimationLayerHandle(value)) return layer->node;
     auto* handle = static_cast<AnimationHandle*>(JS_GetOpaque(value, s_animation_class_id));
     return handle != nullptr ? handle->node : nullptr;
 }
@@ -3432,6 +3652,99 @@ JSValue PropertyObjectGetAnimation(JSContext* ctx, JSValueConst, int argc, JSVal
     auto* script = host && host->active_field_script ? host->active_field_script->m_impl.get() : nullptr;
     auto* node = script ? script->node : host ? host->loading_node : nullptr;
     return playback.is_some() ? WrapAnimation(ctx, rstd::move(playback), node) : JS_UNDEFINED;
+}
+
+JSValue MaterialGetAnimation(JSContext* ctx, JSValueConst value, int argc, JSValueConst* argv) {
+    auto* handle = static_cast<MaterialHandle*>(JS_GetOpaque(value, s_material_class_id));
+    if (handle == nullptr || handle->material == nullptr) return JS_UNDEFINED;
+    TraceDependency(ctx, "read", "animation", handle->node);
+    if (argc == 0 || JS_IsUndefined(argv[0]) || JS_IsNull(argv[0])) {
+        // Only a property-bound thisObject carries its explicit ForMaterial track.
+        return handle->property_animation.is_some()
+                   ? WrapAnimation(ctx, Some((*handle->property_animation).clone()), handle->node)
+                   : JS_UNDEFINED;
+    }
+    const char* name = JS_ToCString(ctx, argv[0]);
+    if (name == nullptr) return JS_EXCEPTION;
+    auto requested = rstd::cppstd::as_str(name).unwrap();
+    Option<Arc<owe::SceneAnimationPlayback>> playback;
+    handle->material->customShader.valueAnimations.iter().for_each([&](auto entry) {
+        if (playback.is_some()) return;
+        auto [uniform_name, animation] = entry;
+        (void)animation;
+        auto candidate = handle->material->ShaderValueAnimation(uniform_name->as_str());
+        if (candidate.is_some() && (*candidate)->Name() == requested)
+            playback = rstd::move(candidate);
+    });
+    JS_FreeCString(ctx, name);
+    return playback.is_some() ? WrapAnimation(ctx, rstd::move(playback), handle->node)
+                              : JS_UNDEFINED;
+}
+
+JSValue AnimationLayerGetAnimation(JSContext* ctx, JSValueConst value, int argc,
+                                    JSValueConst* argv) {
+    auto* handle = GetAnimationLayerHandle(value);
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (handle == nullptr || host == nullptr) return JS_UNDEFINED;
+    TraceDependency(ctx, "read", "animation", handle->node);
+    const bool named = argc > 0 && ! JS_IsUndefined(argv[0]) && ! JS_IsNull(argv[0]);
+    if (! named) {
+        // thisObject.getAnimation() keeps the current property binding, including
+        // existing visible scripts that control their skeletal layer playback.
+        if (host->active_field_script != nullptr) {
+            const auto* active = host->active_field_script->m_impl.get();
+            auto* object = GetAnimationLayerHandle(active->wrapped_object);
+            if (object != nullptr && object->node == handle->node &&
+                object->layer_id == handle->layer_id)
+                return PropertyObjectGetAnimation(ctx, value, argc, argv);
+        }
+    }
+    const char* name = named ? JS_ToCString(ctx, argv[0]) : nullptr;
+    if (named && name == nullptr) return JS_EXCEPTION;
+    Option<Arc<owe::SceneAnimationPlayback>> playback;
+    for (const auto& binding : host->animation_layers) {
+        if (binding.node != handle->node || binding.layer_id != handle->layer_id ||
+            binding.blend_track.is_none()) continue;
+        const auto& track = *binding.blend_track;
+        if (! named || track.playback->Name() == rstd::cppstd::as_str(name).unwrap())
+            playback = Some(track.playback.clone());
+        break;
+    }
+    if (name != nullptr) JS_FreeCString(ctx, name);
+    return playback.is_some() ? WrapAnimation(ctx, rstd::move(playback), handle->node)
+                              : JS_UNDEFINED;
+}
+
+JSValue NodeGetAnimation(JSContext*, JSValueConst, int, JSValueConst*);
+
+JSValue NodeGetAnimationLayer(JSContext* ctx, JSValueConst value, int argc,
+                               JSValueConst* argv) {
+    auto* node = GetLayerNode(value);
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (node == nullptr || host == nullptr || argc < 1) return JS_UNDEFINED;
+    TraceDependency(ctx, "read", "animation", node);
+    const bool indexed = JS_IsNumber(argv[0]);
+    int32_t index = -1;
+    if (indexed && JS_ToInt32(ctx, &index, argv[0]) != 0) return JS_EXCEPTION;
+    const char* name = indexed ? nullptr : JS_ToCString(ctx, argv[0]);
+    if (! indexed && name == nullptr) return JS_EXCEPTION;
+    JSValue result = JS_UNDEFINED;
+    int32_t current_index = 0;
+    bool registered = false;
+    for (const auto& binding : host->animation_layers) {
+        if (binding.node != node) continue;
+        registered = true;
+        const bool matches = indexed ? current_index == index
+                                     : binding.name.as_str() == rstd::cppstd::as_str(name).unwrap();
+        ++current_index;
+        if (! matches) continue;
+        result = WrapAnimationLayer(ctx, binding.layer.clone(), binding.layer_id, node);
+        break;
+    }
+    if (name != nullptr) JS_FreeCString(ctx, name);
+    // Programmatically registered animation playbacks predate puppet owners.
+    if (! registered && ! indexed) return NodeGetAnimation(ctx, value, argc, argv);
+    return result;
 }
 
 JSValue NodeGetAnimation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -3663,7 +3976,7 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
     JS_CFUNC_DEF("getTextureAnimation", 0, NodeGetTextureAnimation),
     JS_CFUNC_DEF("getVideoTexture", 0, NodeGetVideoTexture),
     JS_CFUNC_DEF("getAnimation", 1, NodeGetAnimation),
-    JS_CFUNC_DEF("getAnimationLayer", 1, NodeGetAnimation),
+    JS_CFUNC_DEF("getAnimationLayer", 1, NodeGetAnimationLayer),
     JS_CFUNC_DEF("createLayer", 1, NodeSceneCreateLayer),
     JS_CFUNC_DEF("destroyLayer", 1, NodeSceneDestroyLayer),
     JS_CFUNC_DEF("getLayerIndex", 1, NodeSceneGetLayerIndex),
@@ -3677,7 +3990,18 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
 const JSCFunctionListEntry s_animation_layer_proto_funcs[] = {
     JS_CGETSET_DEF("visible", AnimationLayerGetVisible, AnimationLayerSetVisible),
     JS_CGETSET_DEF("blend", AnimationLayerGetBlend, AnimationLayerSetBlend),
-    JS_CFUNC_DEF("getAnimation", 1, PropertyObjectGetAnimation),
+    JS_CFUNC_DEF("getAnimation", 1, AnimationLayerGetAnimation),
+    JS_CGETSET_DEF("fps", AnimationGetFps, NodeSetIgnore),
+    JS_CGETSET_DEF("frameCount", AnimationGetFrameCount, NodeSetIgnore),
+    JS_CGETSET_DEF("duration", AnimationGetDuration, NodeSetIgnore),
+    JS_CGETSET_DEF("name", AnimationGetName, NodeSetIgnore),
+    JS_CGETSET_DEF("rate", AnimationGetRate, AnimationSetRate),
+    JS_CFUNC_DEF("play", 0, AnimationPlay),
+    JS_CFUNC_DEF("stop", 0, AnimationStop),
+    JS_CFUNC_DEF("pause", 0, AnimationPause),
+    JS_CFUNC_DEF("setFrame", 1, AnimationSetFrame),
+    JS_CFUNC_DEF("getFrame", 0, AnimationGetFrame),
+    JS_CFUNC_DEF("isPlaying", 0, AnimationIsPlaying),
 };
 
 void InitAnimationLayerClass(JSContext* ctx, JSRuntime* rt) {
@@ -3735,7 +4059,7 @@ const JSCFunctionListEntry s_effect_proto_funcs[] = {
 };
 
 const JSCFunctionListEntry s_material_proto_funcs[] = {
-    JS_CFUNC_DEF("getAnimation", 1, PropertyObjectGetAnimation),
+    JS_CFUNC_DEF("getAnimation", 1, MaterialGetAnimation),
 };
 
 void InitEffectClass(JSContext* ctx, JSRuntime* rt) {
@@ -3770,9 +4094,10 @@ void CaptureDefaultBindings(JSContext* ctx) {
 }
 
 void BindThisContext(JSContext* ctx, JSValueConst layer, JSValueConst object) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     JSValue g = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, g, "thisLayer", JS_DupValue(ctx, layer));
-    JS_SetPropertyStr(ctx, g, "thisObject", JS_DupValue(ctx, object));
+    JS_SetProperty(ctx, g, host->atoms.this_layer, JS_DupValue(ctx, layer));
+    JS_SetProperty(ctx, g, host->atoms.this_object, JS_DupValue(ctx, object));
     JS_FreeValue(ctx, g);
 }
 
@@ -3893,7 +4218,12 @@ JSValue OfflineUnsupported(JSContext* ctx, JSValueConst, int argc, JSValueConst*
 }
 
 void InstallOfflineGlobals(JSContext* ctx) {
+    auto*   host   = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx,
+                      global,
+                      "__wwOfflineTraceScene",
+                      JS_NewBool(ctx, host && host->offline && host->offline->trace_scene));
     JS_SetPropertyStr(ctx, global, "__wwOfflineNow", JS_NewCFunction(ctx, OfflineNow, "offlineNow", 0));
     JS_SetPropertyStr(ctx, global, "__wwOfflinePerformanceNow",
         JS_NewCFunction(ctx, OfflinePerformanceNow, "offlinePerformanceNow", 0));
@@ -3912,10 +4242,12 @@ void InstallOfflineGlobals(JSContext* ctx) {
     constexpr const char* source = R"JS(
 (() => {
   const NativeDate = globalThis.Date;
-  const inputRead = globalThis.__wwOfflineInputRead;
-  globalThis.input = new Proxy(globalThis.input, {get(target, key, receiver) {
-    inputRead(); return Reflect.get(target, key, receiver);
-  }});
+  if (globalThis.__wwOfflineTraceScene) {
+    const inputRead = globalThis.__wwOfflineInputRead;
+    globalThis.input = new Proxy(globalThis.input, {get(target, key, receiver) {
+      inputRead(); return Reflect.get(target, key, receiver);
+    }});
+  }
   const now = globalThis.__wwOfflineNow;
   const unsupported = globalThis.__wwOfflineUnsupported;
   // 没写时区的日期串按本地时间解析（ECMAScript 规定，官方同此）。离线本地时区固定为 UTC：
@@ -3958,16 +4290,18 @@ void InstallOfflineGlobals(JSContext* ctx) {
   globalThis.performance = { now: globalThis.__wwOfflinePerformanceNow, timeOrigin: now() };
   // 官方 IEngine 成员（docs.wallpaperengine.io scene/scenescript/reference/class/IEngine）缺实现才算不支持；
   // 官方也没有的键（如 engine.on）按官方读成 undefined，由脚本自己的异常走 source_script_errors。
-  const officialEngine = new Set(['screenResolution','canvasSize','userProperties','timeOfDay','frametime','runtime',
+  const officialEngine = ['screenResolution','canvasSize','userProperties','timeOfDay','frametime','runtime',
     'AUDIO_RESOLUTION_16','AUDIO_RESOLUTION_32','AUDIO_RESOLUTION_64','isDesktopDevice','isMobileDevice','isWallpaper',
     'isScreensaver','isPortrait','isLandscape','isRunningInEditor','openUserShortcut','registerAudioBuffers',
-    'registerAsset','setTimeout','setInterval']);
-  globalThis.engine = new Proxy(globalThis.engine, {
-    get(target, key, receiver) {
-      if (officialEngine.has(key) && !(key in target)) unsupported('engine.' + key);
-      return Reflect.get(target, key, receiver);
+    'registerAsset','setTimeout','setInterval'];
+  for (const key of officialEngine) {
+    if (!(key in globalThis.engine)) {
+      Object.defineProperty(globalThis.engine, key, {
+        get: () => unsupported('engine.' + key),
+        configurable: true
+      });
     }
-  });
+  }
   for (const name of ['fetch','XMLHttpRequest','WebSocket','Worker'])
     globalThis[name] = function() { return unsupported(name); };
 })();
@@ -3986,12 +4320,14 @@ void InstallOfflineGlobals(JSContext* ctx) {
 
 JsRuntime::JsRuntime(Services* offline): m_impl(std::make_unique<Impl>()) {
     m_impl->host.offline = offline;
+    const char* script_costs = std::getenv("WPE_PROFILE_SCRIPT_COSTS");
+    m_impl->script_costs.enabled = script_costs && std::string_view(script_costs) == "1";
     if (m_impl->host.offline) {
         double seconds = std::fmod(m_impl->host.offline->epoch_ms / 1000.0, 86400.0);
         if (seconds < 0.0) seconds += 86400.0;
         m_impl->host.inputs.time_of_day = static_cast<float>(seconds / 86400.0);
     }
-    m_impl->rt  = JS_NewRuntime();
+    m_impl->rt  = JS_NewRuntime2(&kScriptAllocator, nullptr);
     m_impl->ctx = JS_NewContext(m_impl->rt);
     if (! m_impl->rt || ! m_impl->ctx) {
         rstd_error("script: JS_NewRuntime/JS_NewContext failed");
@@ -4006,6 +4342,13 @@ JsRuntime::JsRuntime(Services* offline): m_impl(std::make_unique<Impl>()) {
     // response style scripts in the corpus.
     JS_SetMaxStackSize(m_impl->rt, 0);
     JS_SetContextOpaque(m_impl->ctx, &m_impl->host);
+    m_impl->host.atoms = {
+        JS_NewAtom(m_impl->ctx, "x"), JS_NewAtom(m_impl->ctx, "y"),
+        JS_NewAtom(m_impl->ctx, "z"), JS_NewAtom(m_impl->ctx, "w"),
+        JS_NewAtom(m_impl->ctx, "r"), JS_NewAtom(m_impl->ctx, "g"),
+        JS_NewAtom(m_impl->ctx, "b"), JS_NewAtom(m_impl->ctx, "thisLayer"),
+        JS_NewAtom(m_impl->ctx, "thisObject"),
+    };
     // Built-in ES modules (WEMath, …). Resolves bare `import 'WEMath'`
     // against the kBuiltinModules table; unknown names raise
     // ReferenceError via the loader.
@@ -4050,7 +4393,18 @@ JsRuntime::~JsRuntime() {
     for (auto& [_sha, ns] : m_impl->ns_by_sha) JS_FreeValue(m_impl->ctx, ns);
     m_impl->ns_by_sha.clear();
     if (! JS_IsUndefined(m_impl->wrapped_scene)) JS_FreeValue(m_impl->ctx, m_impl->wrapped_scene);
+    ClearRootLayerCache(m_impl->ctx, m_impl->host);
+    for (auto& [_node, wrapper] : m_impl->host.layer_wrappers) {
+        JS_FreeValue(m_impl->ctx, wrapper);
+    }
+    m_impl->host.layer_wrappers.clear();
     if (! JS_IsUndefined(m_impl->host.vec3_ctor)) JS_FreeValue(m_impl->ctx, m_impl->host.vec3_ctor);
+    if (! JS_IsUndefined(m_impl->host.vec2_proto))
+        JS_FreeValue(m_impl->ctx, m_impl->host.vec2_proto);
+    if (! JS_IsUndefined(m_impl->host.vec3_proto))
+        JS_FreeValue(m_impl->ctx, m_impl->host.vec3_proto);
+    if (! JS_IsUndefined(m_impl->host.vec4_proto))
+        JS_FreeValue(m_impl->ctx, m_impl->host.vec4_proto);
     if (! JS_IsUndefined(m_impl->host.default_layer))
         JS_FreeValue(m_impl->ctx, m_impl->host.default_layer);
     if (! JS_IsUndefined(m_impl->host.default_scene))
@@ -4065,6 +4419,12 @@ JsRuntime::~JsRuntime() {
         if (! JS_IsUndefined(d.fn)) JS_FreeValue(m_impl->ctx, d.fn);
     }
     m_impl->host.deferred.clear();
+    const auto& atoms = m_impl->host.atoms;
+    if (m_impl->ctx) {
+        for (auto atom : { atoms.x, atoms.y, atoms.z, atoms.w, atoms.r, atoms.g, atoms.b,
+                           atoms.this_layer, atoms.this_object })
+            JS_FreeAtom(m_impl->ctx, atom);
+    }
     if (m_impl->ctx) JS_FreeContext(m_impl->ctx);
     if (m_impl->rt) JS_FreeRuntime(m_impl->rt);
 }
@@ -4107,6 +4467,16 @@ void JsRuntime::SetUserProperty(std::string_view key, const NJson& property) {
         auto* fs = m_impl->scripts[script_index].get();
         auto* I  = fs->m_impl.get();
         if (! I->alive) continue;
+        JSValue sp = JS_GetPropertyStr(ctx, I->module_ns, "scriptProperties");
+        if (JS_IsObject(sp)) {
+            JSValue refresh = JS_GetPropertyStr(ctx, sp, "__refreshHostValues");
+            if (JS_IsFunction(ctx, refresh)) {
+                JSValue rr = JS_Call(ctx, refresh, sp, 0, nullptr);
+                JS_FreeValue(ctx, rr);
+            }
+            JS_FreeValue(ctx, refresh);
+        }
+        JS_FreeValue(ctx, sp);
         JSValue fn = JS_GetPropertyStr(ctx, I->module_ns, "applyUserProperties");
         if (JS_IsFunction(ctx, fn)) {
             BindFieldScriptContext(ctx, *I, m_impl->host.default_layer);
@@ -4205,15 +4575,41 @@ void JsRuntime::RegisterInitialLayerConfig(owe::SceneNode* node, NJson config) {
     AppendPublicLayer(m_impl->host, node);
 }
 
+void JsRuntime::RegisterAnimationLayer(owe::SceneNode* node, Arc<owe::PuppetLayer> layer,
+                                        rstd::int32_t layer_id, ref<str> name, float blend_base,
+                                        Option<owe::SceneAnimationTrack> blend_track) {
+    if (! m_impl || node == nullptr) return;
+    if (blend_track.is_some()) node->RegisterAnimation(blend_track->playback.clone());
+    m_impl->host.animation_layers.push_back({
+        .node = node,
+        .layer = rstd::move(layer),
+        .layer_id = layer_id,
+        .name = String::make(name),
+        .blend_base = blend_base,
+        .blend_track = rstd::move(blend_track),
+    });
+}
+
 void JsRuntime::SetSceneRoot(owe::SceneNode* root) {
     if (! m_impl || ! m_impl->ctx) return;
     if (! JS_IsUndefined(m_impl->wrapped_scene)) JS_FreeValue(m_impl->ctx, m_impl->wrapped_scene);
-    if (m_impl->host.scene_root != root)
+    ClearRootLayerCache(m_impl->ctx, m_impl->host);
+    if (m_impl->host.scene_root != root) {
         m_impl->host.public_layers.erase(
             std::remove_if(m_impl->host.public_layers.begin(),
                            m_impl->host.public_layers.end(),
                            [root](auto* node) { return ! SceneTreeContains(root, node); }),
             m_impl->host.public_layers.end());
+        for (auto it = m_impl->host.layer_wrappers.begin();
+             it != m_impl->host.layer_wrappers.end();) {
+            if (! SceneTreeContains(root, it->first)) {
+                JS_FreeValue(m_impl->ctx, it->second);
+                it = m_impl->host.layer_wrappers.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
     m_impl->scene_root      = root;
     m_impl->host.scene_root = root;
     m_impl->wrapped_scene   = root ? WrapLayerNode(m_impl->ctx, root) : JS_UNDEFINED;
@@ -4230,6 +4626,23 @@ void JsRuntime::SetSceneRoot(owe::SceneNode* root) {
 
 void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events) {
     JSContext* ctx = m_impl->ctx;
+    // SceneNode has already advanced these shared playbacks and queued markers.
+    // Sample the blend timeline before its script receives the property value.
+    for (const auto& binding : m_impl->host.animation_layers) {
+        if (binding.blend_track.is_none()) continue;
+        const auto sample = binding.blend_track->EvaluateScalar(binding.blend_base);
+        (void)binding.layer->SetAnimationLayerBlend(binding.layer_id, sample);
+        for (const auto& fs : m_impl->scripts) {
+            auto* script = fs->m_impl.get();
+            auto* object = GetAnimationLayerHandle(script->wrapped_object);
+            if (! script->alive || script->property.as_str() != "blend"_str ||
+                object == nullptr || object->node != binding.node ||
+                object->layer_id != binding.layer_id) continue;
+            JS_FreeValue(ctx, script->current_value);
+            script->current_value = JS_NewFloat64(ctx, sample);
+            script->last_value = ScalarValue { sample };
+        }
+    }
     SweepDeferred(ctx, &m_impl->host);
 
     // Cursor event dispatch. For every script bound to a SceneNode, hit-
@@ -4311,7 +4724,7 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
             }
             // The callback may hand back a replacement property value, the
             // same way update() does; keep it for the update() that follows.
-            auto value = CoerceReturn(ctx, ret, I->kind);
+            auto value = CoerceReturn(ctx, ret, I->kind, m_impl->host.atoms);
             if (! std::holds_alternative<std::monostate>(value)) {
                 JSValue next_value = ScriptValueToJs(ctx, value);
                 JS_FreeValue(ctx, I->current_value);
@@ -4323,6 +4736,11 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
     }
     m_impl->host.active_field_script = nullptr;
 
+    auto& costs = m_impl->script_costs;
+    const bool profile_costs = costs.enabled;
+    JSValue      global      = JS_GetGlobalObject(ctx);
+    JSValueConst last_layer  = JS_UNDEFINED;
+    JSValueConst last_object = JS_UNDEFINED;
     for (size_t script_index = 0; script_index < m_impl->scripts.size(); ++script_index) {
         auto* fs = m_impl->scripts[script_index].get();
         auto* I  = fs->m_impl.get();
@@ -4330,32 +4748,117 @@ void JsRuntime::TickAll(slice<owe::SceneAnimationEventDispatch> animation_events
         if (JS_IsUndefined(I->update_fn)) continue;
         // Swap `thisLayer` to this script's bound node before update. When
         // unbound, restore the original stub captured at bootstrap.
-        BindFieldScriptContext(ctx, *I, m_impl->host.default_layer);
+        std::chrono::steady_clock::time_point cost_started;
+        if (profile_costs) cost_started = std::chrono::steady_clock::now();
+        JSValueConst layer =
+            JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer;
+        JSValueConst object = JS_IsUndefined(I->wrapped_object) ? layer : I->wrapped_object;
+        if (! SameJsValue(layer, last_layer)) {
+            JS_SetProperty(ctx, global, m_impl->host.atoms.this_layer, JS_DupValue(ctx, layer));
+            last_layer = layer;
+        }
+        if (! SameJsValue(object, last_object)) {
+            JS_SetProperty(ctx, global, m_impl->host.atoms.this_object, JS_DupValue(ctx, object));
+            last_object = object;
+        }
+        if (profile_costs) costs.bind.Add(cost_started);
         m_impl->host.active_field_script = fs;
         JSValue ret;
         if (I->update_takes_arg) {
             JSValue args[1] = { JS_DupValue(ctx, I->current_value) };
+            if (profile_costs) cost_started = std::chrono::steady_clock::now();
             ret             = JS_Call(ctx, I->update_fn, JS_UNDEFINED, 1, args);
+            if (profile_costs) {
+                I->profile_update_ms += costs.call.Add(cost_started);
+                ++I->profile_update_calls;
+            }
             JS_FreeValue(ctx, args[0]);
         } else {
+            if (profile_costs) cost_started = std::chrono::steady_clock::now();
             ret = JS_Call(ctx, I->update_fn, JS_UNDEFINED, 0, nullptr);
+            if (profile_costs) {
+                I->profile_update_ms += costs.call.Add(cost_started);
+                ++I->profile_update_calls;
+            }
         }
         if (JS_IsException(ret)) {
             m_impl->LogError(ctx, I->sha, "update threw", fs, "update");
             JS_FreeValue(ctx, ret);
             continue;
         }
-        I->last_value = CoerceReturn(ctx, ret, I->kind);
+        if (profile_costs) cost_started = std::chrono::steady_clock::now();
+        ScriptValue next_last = CoerceReturn(ctx, ret, I->kind, m_impl->host.atoms);
+        const bool  same_value =
+            SameJsValue(ret, I->current_value) && SameScriptValue(next_last, I->last_value);
+        I->last_value = std::move(next_last);
+        if (profile_costs) costs.coerce.Add(cost_started);
         // Keep the next argument in the field's coerced shape. Vec3 scripts
         // often return a scalar for scale, but still read value.x next frame.
-        if (I->update_takes_arg && ! std::holds_alternative<std::monostate>(I->last_value)) {
+        if (I->update_takes_arg && ! std::holds_alternative<std::monostate>(I->last_value) &&
+            ! same_value) {
+            if (profile_costs) cost_started = std::chrono::steady_clock::now();
             JSValue next_value = ScriptValueToJs(ctx, I->last_value);
             JS_FreeValue(ctx, I->current_value);
             I->current_value = next_value;
+            if (profile_costs) costs.rebuild.Add(cost_started);
         }
         JS_FreeValue(ctx, ret);
     }
+    JS_FreeValue(ctx, global);
     m_impl->host.active_field_script = nullptr;
+    if (profile_costs && ++costs.frames == 120) {
+        std::fprintf(stderr,
+            "[script-costs] frames=120 bind_ms=%.6f bind_calls=%llu "
+            "update_call_ms=%.6f update_call_calls=%llu coerce_ms=%.6f coerce_calls=%llu "
+            "rebuild_ms=%.6f rebuild_calls=%llu\n",
+            costs.bind.ms, costs.bind.calls, costs.call.ms, costs.call.calls,
+            costs.coerce.ms, costs.coerce.calls, costs.rebuild.ms, costs.rebuild.calls);
+        FieldScript::Impl* top[10] {};
+        FieldScript::Impl::GetLayerCosts get_layer_totals;
+        for (const auto& script : m_impl->scripts) {
+            auto* candidate = script->m_impl.get();
+            const auto& lookup = candidate->profile_get_layer;
+            get_layer_totals.calls += lookup.calls;
+            get_layer_totals.hits += lookup.hits;
+            get_layer_totals.misses += lookup.misses;
+            get_layer_totals.lookup_ms += lookup.lookup_ms;
+            get_layer_totals.remainder_ms += lookup.remainder_ms;
+            if (candidate->profile_update_calls == 0) continue;
+            for (size_t rank = 0; rank < 10; ++rank) {
+                if (top[rank] && top[rank]->profile_update_ms >= candidate->profile_update_ms)
+                    continue;
+                for (size_t next = 9; next > rank; --next) top[next] = top[next - 1];
+                top[rank] = candidate;
+                break;
+            }
+        }
+        unsigned rank = 0;
+        for (const auto* script : top) {
+            if (! script) break;
+            const auto property = rstd::cppstd::as_string_view(script->property.as_str());
+            const auto& lookup = script->profile_get_layer;
+            std::fprintf(stderr,
+                "[script-costs-top] frames=120 rank=%u owner_layer_id=%d "
+                "property=\"%.*s\" script_sha=\"%s\" update_ms=%.6f update_calls=%llu "
+                "get_layer_calls=%llu get_layer_hits=%llu get_layer_misses=%llu "
+                "get_layer_lookup_ms=%.6f get_layer_remainder_ms=%.6f\n",
+                ++rank, DependencyLayerId(script->node), static_cast<int>(property.size()),
+                property.data(), script->sha.c_str(), script->profile_update_ms,
+                script->profile_update_calls, lookup.calls, lookup.hits, lookup.misses,
+                lookup.lookup_ms, lookup.remainder_ms);
+        }
+        for (const auto& script : m_impl->scripts) {
+            script->m_impl->profile_update_ms = 0;
+            script->m_impl->profile_update_calls = 0;
+            script->m_impl->profile_get_layer = {};
+        }
+        std::fprintf(stderr,
+            "[script-costs-get-layer] frames=120 scope=field_scripts calls=%llu "
+            "hits=%llu misses=%llu lookup_ms=%.6f remainder_ms=%.6f\n",
+            get_layer_totals.calls, get_layer_totals.hits, get_layer_totals.misses,
+            get_layer_totals.lookup_ms, get_layer_totals.remainder_ms);
+        costs = Impl::ScriptCosts { .enabled = true };
+    }
 }
 
 void JsRuntime::ForEachScript(EachFn fn, void* user) {
@@ -4470,7 +4973,7 @@ void RunFieldScriptInit(JSContext* ctx, JsRuntime::Impl* rt, FieldScript* fs) {
     if (JS_IsException(r)) {
         rt->LogError(ctx, I->sha, "init threw", fs, "init");
     } else if (I->capture_init_return) {
-        auto value = CoerceReturn(ctx, r, I->kind);
+        auto value = CoerceReturn(ctx, r, I->kind, rt->host.atoms);
         if (! std::holds_alternative<std::monostate>(value)) {
             JSValue next_value = ScriptValueToJs(ctx, value);
             JS_FreeValue(ctx, I->current_value);
@@ -4540,14 +5043,15 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
         if (context.puppet_layer.is_some()) {
             wrapped_object = WrapAnimationLayer(ctx,
                                                 rstd::move(*context.puppet_layer),
-                                                context.puppet_animation_layer_id);
+                                                context.puppet_animation_layer_id, node);
         }
         break;
     case ScriptPropertyObjectKind::Effect:
-        wrapped_object = WrapEffect(ctx, rstd::move(context.effect));
+        wrapped_object = WrapEffect(ctx, rstd::move(context.effect), node);
         break;
     case ScriptPropertyObjectKind::Material:
-        wrapped_object = WrapMaterial(ctx, context.material);
+        wrapped_object = WrapMaterial(ctx, context.material, node,
+            context.animation.is_some() ? Some((*context.animation).clone()) : None());
         break;
     }
     JSValueConst layer_value =
@@ -4587,7 +5091,7 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
         auto* raw = fault.get();
         m_impl->LogError(ctx, script_sha, what, raw, phase);
         I->current_value = CoerceInitialValue(ctx, initial_value, I->kind);
-        I->last_value = CoerceReturn(ctx, I->current_value, I->kind);
+        I->last_value = CoerceReturn(ctx, I->current_value, I->kind, m_impl->host.atoms);
         m_impl->scripts.push_back(rstd::move(fault));
         return raw;
     };
@@ -4652,6 +5156,12 @@ FieldScript* JsRuntime::MakeFieldScript(std::string_view source, std::string_vie
                 JS_DefinePropertyValueStr(
                     ctx, hv, key.c_str(), ResolveConfigValue(ctx, value), JS_PROP_C_W_E);
             }
+            JSValue refresh = JS_GetPropertyStr(ctx, sp, "__refreshHostValues");
+            if (JS_IsFunction(ctx, refresh)) {
+                JSValue rr = JS_Call(ctx, refresh, sp, 0, nullptr);
+                JS_FreeValue(ctx, rr);
+            }
+            JS_FreeValue(ctx, refresh);
         }
         JS_FreeValue(ctx, hv);
     }

@@ -475,42 +475,72 @@ struct PreparedDescriptorBinding {
             return;
         }
         state.Push(set_index);
-        for (const auto& binding : images) {
-            VkDescriptorImageInfo image {
+        const auto total_writes = images.len() + buffers.len();
+        if (total_writes == usize()) return;
+        constexpr usize                         kStackCap { 16 };
+        rstd::array<VkDescriptorImageInfo, 16>  stack_images {};
+        rstd::array<VkDescriptorBufferInfo, 16> stack_buffers {};
+        rstd::array<VkWriteDescriptorSet, 16>   stack_writes {};
+        rstd::vec::Vec<VkDescriptorImageInfo>          heap_images;
+        rstd::vec::Vec<VkDescriptorBufferInfo>         heap_buffers;
+        rstd::vec::Vec<VkWriteDescriptorSet>           heap_writes;
+        VkDescriptorImageInfo*                         image_infos  = stack_images.data();
+        VkDescriptorBufferInfo*                        buffer_infos = stack_buffers.data();
+        VkWriteDescriptorSet*                          writes       = stack_writes.data();
+        if (images.len() > kStackCap) {
+            heap_images.resize(images.len(), VkDescriptorImageInfo {});
+            image_infos = heap_images.data();
+        }
+        if (buffers.len() > kStackCap) {
+            heap_buffers.resize(buffers.len(), VkDescriptorBufferInfo {});
+            buffer_infos = heap_buffers.data();
+        }
+        if (total_writes > kStackCap) {
+            heap_writes.resize(total_writes, VkWriteDescriptorSet {});
+            writes = heap_writes.data();
+        }
+        usize write_count {};
+        for (usize i {}; i < images.len(); ++i) {
+            const auto& binding           = images[i];
+            image_infos[i.to_primitive()] = VkDescriptorImageInfo {
                 .sampler     = binding.image.sampler,
                 .imageView   = binding.image.view,
                 .imageLayout = binding.layout,
             };
-            VkWriteDescriptorSet write {
+            writes[write_count.to_primitive()] = VkWriteDescriptorSet {
                 .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .pNext           = nullptr,
                 .dstSet          = {},
                 .dstBinding      = binding.binding,
                 .descriptorCount = 1,
                 .descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .pImageInfo      = &image,
+                .pImageInfo      = &image_infos[i.to_primitive()],
             };
-            command.PushDescriptorSetKHR(
-                VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, set_index, write);
+            ++write_count;
         }
-        for (const auto& buffer : buffers) {
-            VkDescriptorBufferInfo info {
+        for (usize i {}; i < buffers.len(); ++i) {
+            const auto& buffer             = buffers[i];
+            buffer_infos[i.to_primitive()] = VkDescriptorBufferInfo {
                 .buffer = buffer.buffer,
                 .offset = buffer.offset,
                 .range  = buffer.size,
             };
-            VkWriteDescriptorSet write {
+            writes[write_count.to_primitive()] = VkWriteDescriptorSet {
                 .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .pNext           = nullptr,
                 .dstSet          = {},
                 .dstBinding      = buffer.binding,
                 .descriptorCount = 1,
                 .descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .pBufferInfo     = &info,
+                .pBufferInfo     = &buffer_infos[i.to_primitive()],
             };
-            command.PushDescriptorSetKHR(
-                VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, set_index, write);
+            ++write_count;
         }
+        command.PushDescriptorSetKHR(
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pipeline_layout,
+            set_index,
+            slice<VkWriteDescriptorSet>::from_raw_parts(writes, write_count));
     }
 };
 
