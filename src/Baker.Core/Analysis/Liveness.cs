@@ -11,6 +11,7 @@ namespace Baker.Core;
 internal sealed class Liveness
 {
     private readonly Dictionary<int, JsonObject> objects;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> ScanTextCache = new(StringComparer.Ordinal);
 
     /// <summary>必须实时的对象 id。</summary>
     internal HashSet<int> Ids { get; } = [];
@@ -300,7 +301,11 @@ internal sealed class Liveness
         // Keep template expressions conservative. Quotes and regex literals must protect embedded
         // comment markers, otherwise a URL can hide the remaining live/shared API calls on its line.
         if (code.Contains('`')) return code;
-        return Regex.Replace(code,
+        // 纯函数，退回与档位回退里同一批脚本要洗上千遍：按原文记住结果。
+        // ponytail: 不设淘汰，超过上限整表清空；长驻进程里场景多到这一步再换 LRU。
+        if (ScanTextCache.TryGetValue(code, out string? cached)) return cached;
+        if (ScanTextCache.Count > 100_000) ScanTextCache.Clear();
+        return ScanTextCache[code] = Regex.Replace(code,
             "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|(?<comment>/\\*[\\s\\S]*?\\*/|//[^\\r\\n]*)|/(?:\\\\.|[^/\\\\\\r\\n])+/[a-z]*",
             match => match.Groups["comment"].Success ? "" : match.Value);
     }

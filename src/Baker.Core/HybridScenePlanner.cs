@@ -377,7 +377,8 @@ public sealed class HybridScenePlanner(NativeTools tools, Func<(uint Width, uint
             ? await PrefixCachesAsync() : new JsonArray();
         timing.Mark("A10_effect_prefix");
         // 只记录这次分析实际用的是哪台设备；要不要烘是用户的事，不在这里裁决。
-        JsonObject analysisDevice = DescribeAnalysisDevice(EnumerateDevicesOrNull(), request.DeviceUuid);
+        JsonObject analysisDevice = DescribeAnalysisDevice(memo is null ? EnumerateDevicesOrNull() : memo.Devices(EnumerateDevicesOrNull),
+            request.DeviceUuid);
         timing.Mark("A11_enumerate_devices");
         JsonObject report = PlanWriter.Compose(request, source, sourceHash, output, resolution, analysisDevice, project, properties, parallax,
             projection, graph, observation, liveness, allocation, composer, verdict, loop, effectPrefixCaches, daytime);
