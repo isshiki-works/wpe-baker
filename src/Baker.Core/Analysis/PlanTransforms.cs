@@ -307,10 +307,11 @@ internal static class PlanTransforms
             .Where(n => n["script"] is JsonValue).Select(n => Liveness.CapabilityScanText(n["script"]!.GetValue<string>()))
             .Any(code => Regex.IsMatch(code, @"\b(getEffect|getEffects|findEffect|eval|Function|Reflect|Proxy|import)\b|\.\s*effects\b|\[\s*['""]effects['""]\s*\]"));
         var dependencies = runtime["runtime_dependencies"]!.AsArray().OfType<JsonObject>().ToArray();
+        var layersByOwner = runtime["runtime_layers"]!.AsArray().OfType<JsonObject>().ToLookup(n => Int(n["owner"]));
         foreach (var obj in objects)
         {
             int id = Id(obj);
-            var observed = runtime["runtime_layers"]!.AsArray().OfType<JsonObject>().Where(n => Int(n["owner"]) == id).ToArray();
+            var observed = layersByOwner[id].ToArray();
             var audio = observed.SelectMany(n => n["materials"]?.AsArray().OfType<JsonObject>() ?? []).Where(Input).ToArray();
             if (audio.Length == 0) continue;
             JsonObject Entry(int index, JsonObject? effect, string? reason = null) => new() {

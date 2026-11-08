@@ -9,13 +9,19 @@ namespace Baker.Core;
 /// 同一个键并发请求时只算一次（退回轮内并行），算失败的不记，下次照常重算。
 /// 母本只由这里持有：JSON 交出去的是 DeepClone，Liveness 交出去的是新副本，调用方可以随意改写。
 /// </summary>
-/// <param name="retreatParallelism">退回一轮里同时重查的组数上限（实际取 min(组数, 它)）；测试传 1 得到串行结果做对照。</param>
-internal sealed class AnalysisMemo(int retreatParallelism = 8)
+/// <param name="retreatParallelism">退回一轮里同时重查的组数上限（实际取 min(组数, 它)），默认本机逻辑核数；测试传 1 得到串行结果做对照。</param>
+internal sealed class AnalysisMemo(int retreatParallelism = 0)
 {
     private readonly ConcurrentDictionary<string, Lazy<Task<object>>> entries = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> hashed = new(StringComparer.OrdinalIgnoreCase);
+    private Lazy<IReadOnlyList<VulkanDeviceInfo>?>? devices;
 
-    internal int RetreatParallelism { get; } = retreatParallelism;
+    // 退回重查基本是纯 CPU（观测与探针都按键记忆），并行上限跟着核数走
+    internal int RetreatParallelism { get; } = retreatParallelism > 0 ? retreatParallelism : Environment.ProcessorCount;
+
+    /// <summary>本机 Vulkan 设备列表：只用于 plan 的溯源字段，一次 analyze 只枚举一次（原先每次子分析各枚举一次）。</summary>
+    internal IReadOnlyList<VulkanDeviceInfo>? Devices(Func<IReadOnlyList<VulkanDeviceInfo>?> enumerate) =>
+        LazyInitializer.EnsureInitialized(ref devices, () => new(enumerate)).Value;
     /// <summary>退回重查的次数：子分析目录（retreat-N）与进度序号都按它，主路径与关交互试探的退回不撞。</summary>
     internal int Retreats;
 

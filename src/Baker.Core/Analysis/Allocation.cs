@@ -286,10 +286,16 @@ internal sealed class Allocation
                 Int(d["target"]) is int target && subtree.Contains(target));
         var omittedSubtreeRoots = new List<int>();
         var omittedIds = allocation.OmittedIds;
+        // 子树 = graph.Within(layer, id) 为真的层：先按父子表收集，再按作者顺序装进集合（与逐层 Within 结果、插入顺序都相同）。
+        var childrenOf = sourceOrder.Where(id => Int(objects[id]["parent"]) is int parent && objects.ContainsKey(parent))
+            .ToLookup(id => Int(objects[id]["parent"])!.Value);
         foreach (int id in sourceOrder)
         {
             if (omittedIds.Contains(id)) continue;
-            var subtree = sourceOrder.Where(layer => graph.Within(layer, id)).ToHashSet();
+            var members = new HashSet<int>();
+            void Collect(int layer) { members.Add(layer); foreach (int child in childrenOf[layer]) Collect(child); }
+            Collect(id);
+            var subtree = sourceOrder.Where(members.Contains).ToHashSet();
             if (!SafeHiddenSubtree(id, subtree) && !OffViewSubtree(id, subtree)) continue;
             omittedSubtreeRoots.Add(id);
             omittedIds.UnionWith(subtree);
