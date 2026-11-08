@@ -1709,9 +1709,10 @@ void MdlParser::GenMeshFromMdl(SceneMesh::Submesh& submesh, const Mdl::Mesh& src
                             compact_id          = unique_count++;
                             hash_table[slot]    = compact_id;
                             orig_to_compact[v]  = compact_id;
-                            compact_pos.push_back(p[0]);
-                            compact_pos.push_back(p[1]);
-                            compact_pos.push_back(p[2]);
+                            // 本文件里 vector::push_back 会被 clang 22（模块）错编：libc++ emplace_back
+                            // 里 lambda 按引用捕获的局部 __end 被生成成函数内静态变量，end 指针不前进。
+                            // 改用 insert，不走那条 lambda 路径。
+                            compact_pos.insert(compact_pos.end(), p, p + 3);
                             break;
                         }
                         const float* cp = compact_pos.data() + size_t(cand) * 3;
@@ -1747,7 +1748,9 @@ void MdlParser::GenMeshFromMdl(SceneMesh::Submesh& submesh, const Mdl::Mesh& src
         submesh.draw_ranges.reserve(src.parts.len().to_primitive());
         for (const auto& p : src.parts) {
             if (p.size == 0) continue;
-            submesh.draw_ranges.push_back({ u32(p.start), u32(p.size) });
+            // 用 insert 而不是 push_back：原因见 GenMeshFromMdl 里 compact_pos 处的说明。
+            submesh.draw_ranges.insert(submesh.draw_ranges.end(),
+                                       SceneMesh::DrawRange { u32(p.start), u32(p.size) });
         }
     }
 }
@@ -1763,7 +1766,7 @@ void MdlParser::GenMaskSubmeshFromMdl(SceneMesh::Submesh& submesh, const Mdl::Me
         if (idx >= src.parts.len().to_primitive()) continue;
         const auto& p = src.parts[usize(idx)];
         if (p.size == 0) continue;
-        ranges.push_back({ u32(p.start), u32(p.size) });
+        ranges.insert(ranges.end(), SceneMesh::DrawRange { u32(p.start), u32(p.size) }); // 同上，不用 push_back
     }
     submesh.draw_ranges = std::move(ranges);
 }
