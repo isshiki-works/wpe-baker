@@ -8,30 +8,30 @@ Periodica analyzes animation in Wallpaper Engine scenes, coordinates its periods
 
 The output is a standalone Wallpaper Engine project. The video decoder plays the repeating animation while retained layers continue responding to live input. Analysis and generation run locally, with no wallpaper uploads or AI model calls.
 
-[Website](https://isshiki-works.github.io/wpe-baker/) · [Download 2.1.0](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.1.0)
+[Website](https://isshiki-works.github.io/wpe-baker/) · [Download 2.1.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.1.1)
 
 ## Measured
 
-Measured for the 2.0 release in the official Wallpaper Engine player, Intel Arc B390 laptop on AC power. Original and baked scenes alternate in A/B/B/A order, with 20 seconds sampled per segment. The table below uses Balanced precision and default wallpaper properties. Baked output is 1920×1080 at 60 FPS; originals render normally on the 3072×1920 display.
+Measured in the official Wallpaper Engine player on an Intel Arc B390 laptop on AC power. Original and baked scenes alternate in A/B/B/A order, with 20 seconds sampled per segment. The table below uses Balanced precision and default wallpaper properties. Baked output is 1920×1080 at 60 FPS; originals render normally on the 3072×1920 display.
 
 | Wallpaper | Original iGPU | Baked iGPU | Change | CPU package: original → baked |
 |---|---:|---:|---:|---:|
-| Nijika (3650475846) | 20.87 W | 14.63 W | −29.9% | 31.80 → 26.51 W |
-| Ayanami Rei (3258032485) | 2.16 W | 0.14 W | −93.4% | 11.23 → 8.72 W |
-| Atri (3669681034) | 8.51 W | 0.27 W | −96.8% | 17.85 → 9.26 W |
-| Alone (3448877775) | 5.52 W | 4.81 W | −12.8% | 15.45 → 16.17 W |
-| Ultraman Leo (3685247684) | 9.08 W | 1.44 W | −84.1% | 19.58 → 11.58 W |
-| Yuri (3572877776) | 2.10 W | 0.48 W | −77.4% | 11.59 → 9.45 W |
-| Frieren (3426865175) | 10.57 W | 7.23 W | −31.6% | 19.62 → 19.64 W |
-| Lost Landscape 3 (3713073223) | 8.10 W | 3.30 W | −59.2% | 17.96 → 13.61 W |
+| Nijika (3650475846) | 22.33 W | 15.13 W | −32.2% | 43.19 → 37.15 W |
+| Ayanami Rei (3258032485) | 2.14 W | 0.12 W | −94.3% | 19.14 → 17.14 W |
+| Atri (3669681034) | 8.23 W | 0.24 W | −97.1% | 27.35 → 19.68 W |
+| Alone (3448877775) | 5.13 W | 4.19 W | −18.3% | 23.36 → 24.49 W |
+| Ultraman Leo (3685247684) | 9.04 W | 1.41 W | −84.4% | 27.54 → 18.11 W |
+| Yuri (3572877776) | 2.15 W | 0.41 W | −81.1% | 20.59 → 18.74 W |
+| Frieren (3426865175) | 10.38 W | 6.83 W | −34.2% | 29.52 → 27.33 W |
+| Lost Landscape 3 (3713073223) | 8.02 W | 3.26 W | −59.4% | 28.64 → 23.08 W |
 
 Power savings also extend to high refresh rates. These tests use the same alternating playback method, with both original and baked output at the display's native 3072×1920 resolution:
 
 | Wallpaper and frame rate | Original iGPU | Baked iGPU | Change | CPU package: original → baked |
 |---|---:|---:|---:|---:|
-| Atri · 60 FPS | 8.50 W | 0.30 W | −96.5% | 16.53 → 9.33 W |
-| Atri · 165 FPS | 25.55 W | 2.19 W | −91.4% | 37.67 → 12.84 W |
-| Ayanami Rei · 120 FPS | 8.75 W | 1.97 W | −77.5% | 18.62 → 13.72 W |
+| Atri · 60 FPS | 8.27 W | 0.24 W | −97.2% | 27.43 → 18.39 W |
+| Atri · 165 FPS | 25.91 W | 2.28 W | −91.2% | 49.53 → 22.04 W |
+| Ayanami Rei · 120 FPS | 8.12 W | 1.57 W | −80.7% | 26.43 → 21.36 W |
 
 ## 2.1 · More efficient rendering
 
@@ -51,17 +51,17 @@ Building on open-wallpaper-engine, Periodica reworks scene execution and the Vul
 
 In the previous baking pipeline, transparent frames passed through full-frame readback, CPU scanning, lossless intermediate video and a second encoding pass. Version 2.0 moves cropping, transparency processing and loop crossfades into the GPU pipeline, then feeds the result directly to the hardware encoder. Fewer data transfers, intermediate files and repeated computations make the entire generation process faster.
 
-In a same-scene comparison on an RTX 5090 D v2, full 4K baking time fell from about **15 minutes to 36 seconds, a roughly 25-fold speedup**. A separate long-scene 4K test reached **3.5 times real-time speed** from analysis through generation, producing **10 minutes of 4K 60 FPS animation in about 3 minutes**.
+In a same-scene comparison on an RTX 5090 D v2, full 4K baking time fell from **108 seconds to 17 seconds, more than a 6-fold speedup**. A separate long-scene 4K test reached **3.7 times real-time speed** from analysis through generation, producing **4 minutes 18 seconds of 4K 60 FPS animation in about 70 seconds**.
 
 **A redesigned interface.** 2.0 brings liquid glass styling to wallpaper selection, generation settings and the task queue, all in one window. Previews are rendered directly from the scene. Completed jobs can be previewed, applied or exported.
 
-![WPE Baker 2.0 interface](https://isshiki-works.github.io/wpe-baker/site/gui-2.0-en.png)
+![WPE Baker 2.1 interface](https://isshiki-works.github.io/wpe-baker/site/gui-2.1-en.png)
 
 ## Quick start
 
 Requires Windows 10/11 64-bit, Wallpaper Engine from Steam and a Vulkan-capable GPU. The portable package includes its runtime dependencies; no separate .NET, Python or FFmpeg installation is needed.
 
-1. Download `WpeBaker-2.1.0-win-x64.zip` from the release page and extract the whole archive into a writable directory.
+1. Download `WpeBaker-2.1.1-win-x64.zip` from the release page and extract the whole archive into a writable directory.
 2. Open the extracted `WpeBaker` folder and run `WpeBaker.exe`.
 3. Choose the current wallpaper, or drop in a wallpaper folder or `scene.pkg`. Workshop wallpapers are usually under `steamapps\workshop\content\431960` in your Steam library.
 4. Choose animation precision, interaction, frame rate and resolution, then click **Analyze**. The plan shows what can be baked, what stays live and which settings will be used. Analyze again after changing settings.
@@ -110,7 +110,7 @@ Measurement requires one display and a single wallpaper assignment, and temporar
 
 ## Source and licenses
 
-The release includes the matching `WpeBaker-2.1.0-source.zip`, with dependency sources, third-party notices and build records. Complete build instructions are in its `REBUILD.md`.
+The release includes the matching `WpeBaker-2.1.1-source.zip`, with dependency sources, third-party notices and build records. Complete build instructions are in its `REBUILD.md`.
 
 The C# application and developer scripts use the [MIT license](LICENSE). The offline renderer derives from [open-wallpaper-engine](https://github.com/waywallen/open-wallpaper-engine) and uses [GPL-2.0](engine/LICENSE). See [third-party notices](THIRD-PARTY-NOTICES.md) for dependency licenses and [SOURCE.md](SOURCE.md) for corresponding source details. Wallpaper artwork belongs to its respective authors. WPE Baker is not affiliated with Wallpaper Engine.
 

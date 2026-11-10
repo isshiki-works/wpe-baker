@@ -1,6 +1,15 @@
-# WPE Baker 2.1 · More efficient rendering
+# WPE Baker 2.1.1 · Renderer crash fix and faster analysis
 
-WPE Baker turns repeating animation in Wallpaper Engine scenes into seamless video loops, while clocks, music response and other live content can continue running in the scene. Version 2.1 improves the shared renderer paths used during analysis, previews and generation.
+WPE Baker turns repeating animation in Wallpaper Engine scenes into seamless video loops, while clocks, music response and other live content can continue running in the scene. Version 2.1.1 fixes a renderer crash in 2.1.0 and speeds up analysis of scenes with many layers.
+
+## Changes in 2.1.1
+
+- Fixed a crash during analysis of scenes that combine skeletal animation with masks. Seven of the 489 regression wallpapers were affected; all of them now analyze and generate normally. Rendering of other scenes is unchanged.
+- Scenes with many layers analyze faster: device enumeration, script scanning and per-layer lookups now run once per analysis. On the same machine, analysis of a 531-layer wallpaper drops from 400 to 288 seconds with an identical plan.
+
+## 2.1 · More efficient rendering
+
+Version 2.1 improves the shared renderer paths used during analysis, previews and generation.
 
 - Resource updates follow actual changes, with fewer repeated lookups, transformations and shader checks.
 - Shader reflection is reused and pipeline keys are assembled with less repeated work.
@@ -27,10 +36,8 @@ Across 24 scenes (12 wallpapers at 1920×1080 and 3840×2160, 60 FPS simulation 
 | Cyberpunk 2077 — Night City (3691570025) | 1080p | 534.06 → 940.84 FPS (1.76x) | 161.10 → 271.85 FPS (1.69x) |
 | Cyberpunk 2077 — Night City (3691570025) | 4K | 248.93 → 530.06 FPS (2.13x) | 96.66 → 203.07 FPS (2.10x) |
 
-Throughput above is calculated from mean whole-frame rendering time and does not include analysis, encoding or export. Reusing static rendering results across frames increases VRAM usage by about 100–130 MB on affected scenes. Actual gains vary by scene and hardware.
-
 ## Installation
 
-Extract the complete WpeBaker-2.1.0-win-x64.zip archive into a writable folder and run WpeBaker.exe. Windows 10/11 x64, Wallpaper Engine from Steam and a Vulkan-capable GPU are required. .NET, Python and FFmpeg do not need to be installed separately. Analysis, generation, preview, apply and export use the existing workflow; retained live layers continue to run in Wallpaper Engine.
+Extract the complete WpeBaker-2.1.1-win-x64.zip archive into a writable folder and run WpeBaker.exe. Windows 10/11 x64, Wallpaper Engine from Steam and a Vulkan-capable GPU are required. .NET, Python and FFmpeg do not need to be installed separately. Analysis, generation, preview, apply and export use the existing workflow; retained live layers continue to run in Wallpaper Engine.
 
-The matching WpeBaker-2.1.0-source.zip contains dependency sources, notices, exact native build records and REBUILD.md. Distribute both archives together; their SHA256 values are listed in SHA256SUMS.txt. The application and developer scripts use MIT; the offline renderer uses GPL-2.0, and bundled dependencies retain their own licenses.
+The matching WpeBaker-2.1.1-source.zip contains dependency sources, notices, exact native build records and REBUILD.md. Distribute both archives together; their SHA256 values are listed in SHA256SUMS.txt. The application and developer scripts use MIT; the offline renderer uses GPL-2.0, and bundled dependencies retain their own licenses.
