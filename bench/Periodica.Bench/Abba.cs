@@ -311,8 +311,9 @@ public static class Abba
             int rows = item?["displayed_rows"]?.GetValue<int>() ?? 0;
             double fps = Number(item?["displayed_fps"]) ?? 0;
             int? dropped = item?["dropped_rows"]?.GetValue<int>();
-            // Finite samples can differ by one frame even at steady 60 FPS (e.g. 59.98).
-            if (rows <= 1 || dropped is null || dropped > 0 || fps < target - target / rows)
+            // Finite samples can differ by one frame even at steady 60 FPS (e.g. 59.98), and a panel's real
+            // refresh rate sits slightly under nominal (a "165 Hz" panel measured 164.89–164.99 with zero drops).
+            if (rows <= 1 || dropped is null || dropped > 0 || fps < target * 0.999 - target / rows)
                 reasons.Add($"{label}: displayed frame count, drops, or cadence did not establish target FPS.");
             if (item?["gpu_adapters"] is not JsonObject { Count: 1 })
                 reasons.Add($"{label}: GPU adapter attribution was ambiguous.");
