@@ -16,22 +16,22 @@ Measured in the official Wallpaper Engine player on an Intel Arc B390 laptop on 
 
 | Wallpaper | Original iGPU | Baked iGPU | Change | CPU package: original → baked |
 |---|---:|---:|---:|---:|
-| Nijika (3650475846) | 22.33 W | 15.13 W | −32.2% | 43.19 → 37.15 W |
-| Ayanami Rei (3258032485) | 2.14 W | 0.12 W | −94.3% | 19.14 → 17.14 W |
-| Atri (3669681034) | 8.23 W | 0.24 W | −97.1% | 27.35 → 19.68 W |
-| Alone (3448877775) | 5.13 W | 4.19 W | −18.3% | 23.36 → 24.49 W |
-| Ultraman Leo (3685247684) | 9.04 W | 1.41 W | −84.4% | 27.54 → 18.11 W |
-| Yuri (3572877776) | 2.15 W | 0.41 W | −81.1% | 20.59 → 18.74 W |
-| Frieren (3426865175) | 10.38 W | 6.83 W | −34.2% | 29.52 → 27.33 W |
-| Lost Landscape 3 (3713073223) | 8.02 W | 3.26 W | −59.4% | 28.64 → 23.08 W |
+| Nijika (3650475846) | 20.98 W | 14.74 W | −29.7% | 31.13 → 26.95 W |
+| Ayanami Rei (3258032485) | 2.28 W | 0.13 W | −94.4% | 8.85 → 7.15 W |
+| Atri (3669681034) | 8.39 W | 0.26 W | −96.9% | 16.11 → 7.94 W |
+| Alone (3448877775) | 5.74 W | 4.90 W | −14.7% | 15.08 → 15.03 W |
+| Ultraman Leo (3685247684) | 8.99 W | 1.43 W | −84.1% | 17.87 → 9.71 W |
+| Yuri (3572877776) | 2.25 W | 0.45 W | −80.0% | 10.55 → 8.40 W |
+| Frieren (3426865175) | 10.67 W | 7.79 W | −27.0% | 20.00 → 18.74 W |
+| Lost Landscape 3 (3713073223) | 8.14 W | 3.48 W | −57.2% | 17.13 → 12.84 W |
 
 Power savings also extend to high refresh rates. These tests use the same alternating playback method, with both original and baked output at the display's native 3072×1920 resolution:
 
 | Wallpaper and frame rate | Original iGPU | Baked iGPU | Change | CPU package: original → baked |
 |---|---:|---:|---:|---:|
-| Atri · 60 FPS | 8.27 W | 0.24 W | −97.2% | 27.43 → 18.39 W |
-| Atri · 165 FPS | 25.91 W | 2.28 W | −91.2% | 49.53 → 22.04 W |
-| Ayanami Rei · 120 FPS | 8.12 W | 1.57 W | −80.7% | 26.43 → 21.36 W |
+| Atri · 60 FPS | 8.40 W | 0.26 W | −96.9% | 16.22 → 8.14 W |
+| Atri · 165 FPS | 25.56 W | 2.24 W | −91.2% | 38.30 → 13.77 W |
+| Ayanami Rei · 120 FPS | 8.62 W | 1.50 W | −82.6% | 18.00 → 11.56 W |
 
 ## 2.1 · More efficient rendering
 
