@@ -6,6 +6,7 @@ WPE Baker turns repeating animation in Wallpaper Engine scenes into seamless vid
 
 - Fixed a crash during analysis of scenes that combine skeletal animation with masks. Seven of the 489 regression wallpapers were affected; all of them now analyze normally. Rendering of other scenes is unchanged.
 - Scenes with many layers analyze faster: device enumeration, script scanning and per-layer lookups now run once per analysis. On the same machine, analysis of a 531-layer wallpaper drops from 400 to 288 seconds with an identical plan.
+- Fixed `compare` failing on some high-refresh displays.
 
 ## 2.1 · More efficient rendering
 
