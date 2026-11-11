@@ -8,7 +8,7 @@ Periodica 分析 Wallpaper Engine 场景，通过数学建模协调其中可烘�
 
 输出是一个独立的 Wallpaper Engine 项目。周期动画由视频解码器播放，保留的实时图层继续响应输入。分析与生成都在本机完成，无需上传壁纸，也不调用 AI 模型。
 
-[官网](https://isshiki-works.github.io/wpe-baker/zh.html) · [下载 2.1.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.1.1)
+[官网](https://isshiki-works.github.io/wallpaper-engine-baker/zh.html) · [下载 2.1.1](https://github.com/isshiki-works/wallpaper-engine-baker/releases/tag/v2.1.1)
 
 ## 实测
 
@@ -55,7 +55,7 @@ Periodica 在 open-wallpaper-engine 的基础上，重构了场景执行与 Vulk
 
 **重新设计界面。** 2.0 采用液态玻璃美学，将壁纸选择、生成设置与任务队列集中在同一窗口。预览图直接从场景渲染，生成后可预览、应用或导出成品。
 
-![WPE Baker 2.1 界面](https://isshiki-works.github.io/wpe-baker/site/gui-2.1-zh.png)
+![WPE Baker 2.1 界面](https://isshiki-works.github.io/wallpaper-engine-baker/site/gui-2.1-zh.png)
 
 ## 快速开始
 
@@ -106,7 +106,7 @@ Periodica 同时提供 Windows 上的 **Wallpaper Engine 离线场景渲染器**
 
 ## 反馈
 
-欢迎用中文或英文[提交问题](https://github.com/isshiki-works/wpe-baker/issues)。请提供程序版本、显卡型号、创意工坊 ID、复现步骤与错误信息；已有分析或生成结果时，可附上 `plan.json`、`bake.json` 和相关日志。
+欢迎用中文或英文[提交问题](https://github.com/isshiki-works/wallpaper-engine-baker/issues)。请提供程序版本、显卡型号、创意工坊 ID、复现步骤与错误信息；已有分析或生成结果时，可附上 `plan.json`、`bake.json` 和相关日志。
 
 ## 源码与许可
 

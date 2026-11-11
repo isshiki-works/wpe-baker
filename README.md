@@ -8,7 +8,7 @@ Periodica analyzes animation in Wallpaper Engine scenes, coordinates its periods
 
 The output is a standalone Wallpaper Engine project. The video decoder plays the repeating animation while retained layers continue responding to live input. Analysis and generation run locally, with no wallpaper uploads or AI model calls.
 
-[Website](https://isshiki-works.github.io/wpe-baker/) · [Download 2.1.1](https://github.com/isshiki-works/wpe-baker/releases/tag/v2.1.1)
+[Website](https://isshiki-works.github.io/wallpaper-engine-baker/) · [Download 2.1.1](https://github.com/isshiki-works/wallpaper-engine-baker/releases/tag/v2.1.1)
 
 ## Measured
 
@@ -55,7 +55,7 @@ In a same-scene comparison on an RTX 5090 D v2, full 4K baking time fell from **
 
 **A redesigned interface.** 2.0 brings liquid glass styling to wallpaper selection, generation settings and the task queue, all in one window. Previews are rendered directly from the scene. Completed jobs can be previewed, applied or exported.
 
-![WPE Baker 2.1 interface](https://isshiki-works.github.io/wpe-baker/site/gui-2.1-en.png)
+![WPE Baker 2.1 interface](https://isshiki-works.github.io/wallpaper-engine-baker/site/gui-2.1-en.png)
 
 ## Quick start
 
@@ -106,7 +106,7 @@ Measurement requires one display and a single wallpaper assignment, and temporar
 
 ## Feedback
 
-[Issues](https://github.com/isshiki-works/wpe-baker/issues) are welcome in English or Chinese. Include the application version, GPU, Workshop ID, steps to reproduce and error messages. If analysis or generation produced reports, attach `plan.json`, `bake.json` and relevant logs.
+[Issues](https://github.com/isshiki-works/wallpaper-engine-baker/issues) are welcome in English or Chinese. Include the application version, GPU, Workshop ID, steps to reproduce and error messages. If analysis or generation produced reports, attach `plan.json`, `bake.json` and relevant logs.
 
 ## Source and licenses
 
