@@ -17,7 +17,7 @@ public static class BakeDiskBudget
     public const double MasterCompressionRatio = 5;
 
     /// <summary>预估之外还要留出的空闲空间：系统页面文件、成品另存与同机其它任务都在同一个盘上。</summary>
-    public const ulong ReserveBytes = 10UL * 1024 * 1024 * 1024;
+    public const ulong ReserveBytes = 2UL * 1024 * 1024 * 1024;
 
     /// <summary>磁盘空间不足时的 bake 状态。不在界面的"已完成"白名单里，不会被当成结果展示。</summary>
     public const string RejectedBakeStatus = "candidate_rejected_disk_space";

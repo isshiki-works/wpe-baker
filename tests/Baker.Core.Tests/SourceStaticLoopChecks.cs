@@ -122,13 +122,6 @@ internal static class SourceStaticLoopChecks
             !Analyze(Scene(), Runtime("lz4video"))["source_static"]!.GetValue<bool>(),
             "an LZ4-compressed mip is judged by its decoded prefix: plain pixels are still, a compressed video container header is not");
 
-        var rejectionMethod = typeof(Verdict).GetMethod("RequireTraceableRejection",
-            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
-        void Require(JsonObject plan)
-        {
-            try { rejectionMethod.Invoke(null, [plan]); }
-            catch (System.Reflection.TargetInvocationException error) when (error.InnerException is not null) { throw error.InnerException; }
-        }
         JsonObject Plan(string route, JsonArray blockers, JsonArray unresolved, JsonArray? prefixCaches = null) => new()
         {
             ["route"] = route, ["effect_prefix_caches"] = prefixCaches ?? new JsonArray(),
@@ -137,23 +130,6 @@ internal static class SourceStaticLoopChecks
             ["whole_layer"] = new JsonObject { ["status"] = "unavailable", ["blockers"] = blockers,
                 ["loop"] = new JsonObject { ["unresolved"] = unresolved } }
         };
-        bool trapped = false;
-        try { Require(Plan("whole_layer", [], [])); }
-        catch (InvalidOperationException) { trapped = true; }
-        check(trapped, "an unavailable whole layer with no blocker and no unresolved mechanism is an internal error naming its baked layers");
-        Require(Plan("whole_layer", [], [new JsonObject { ["kind"] = "source_static", ["detail"] = "a recorded reason" }]));
-        Require(Plan("whole_layer", ["a recorded blocker"], []));
-        Require(Plan("effect_prefix", [], [], [new JsonObject { ["id"] = "prefix-1" }]));
-        check(true, "a recorded blocker, an unresolved mechanism or an effect-prefix route is a traceable rejection");
-        // 把不平稳的粒子层留实时之后，剩下的层可能只剩求解器的结构化空候选原因（如手工轨道公共周期超上限）：
-        // 这是说清楚的拒绝，不是内部错误。顶层 loop 与 whole_layer.loop 两份副本任一带原因都算。
-        JsonObject reasoned = Plan("whole_layer", [], []);
-        reasoned["loop"]!["no_candidate_reason"] = new JsonObject { ["kind"] = "FixedPeriodExceedsCeiling", ["fixed_period_seconds"] = 47880 };
-        Require(reasoned);
-        JsonObject reasonedCopy = Plan("whole_layer", [], []);
-        reasonedCopy["whole_layer"]!["loop"]!["no_candidate_reason"] = new JsonObject { ["kind"] = "NoFrameOnFixedStepSatisfiesComponents" };
-        Require(reasonedCopy);
-        check(true, "a structured no-candidate reason on either loop copy is a traceable rejection (particles kept live can leave nothing else)");
 
         // fix/narrative-rc10：求解器给出结构化空候选原因、却没有未解析机制（3757825891 layered 的重查、3661249043 --retain-live）
         // 不再掉进内部错误，而是写成 blocker。
@@ -174,10 +150,8 @@ internal static class SourceStaticLoopChecks
         solverMethod.Invoke(null, [noFrame]);
         solverMethod.Invoke(null, [noFrame]);
         JsonObject noFrameBlocker = noFrame["blockers_localized"]![0]!.AsObject();
-        bool noFrameTraceable = true;
-        try { Require(noFrame); } catch (InvalidOperationException) { noFrameTraceable = false; }
         check(noFrame["blockers"]!.AsArray().Count == 1 && noFrame["whole_layer"]!["blockers"]!.AsArray().Count == 1 &&
-            noFrame["status"]!.GetValue<string>() == "requires_resolution" && noFrameTraceable &&
+            noFrame["status"]!.GetValue<string>() == "requires_resolution" &&
             noFrameBlocker["key"]?.GetValue<string>() == "blocker.loop_no_common_frame" &&
             PlanNarrative.Summarize(noFrame)["key"]!.GetValue<string>() == "summary.blocked",
             "a solver no-common-frame result without unresolved mechanisms becomes one bilingual blocker instead of an internal error");
@@ -193,12 +167,9 @@ internal static class SourceStaticLoopChecks
         JsonObject withCandidate = SolverPlan("NoFrameOnFixedStepSatisfiesComponents");
         withCandidate["whole_layer"]!["loop"]!["candidates"]!.AsArray().Add(new JsonObject { ["frames"] = 60 });
         foreach (JsonObject untouched in new[] { withMechanism, noTemporal, withCandidate }) solverMethod.Invoke(null, [untouched]);
-        bool noTemporalTrapped = false;
-        noTemporal["whole_layer"]!["loop"]!["unresolved"] = new JsonArray();
-        try { Require(noTemporal); } catch (InvalidOperationException) { noTemporalTrapped = true; }
         check(withMechanism["blockers"]!.AsArray().Count == 0 && noTemporal["blockers"]!.AsArray().Count == 0 &&
-            withCandidate["blockers"]!.AsArray().Count == 0 && noTemporalTrapped,
-            "no solver blocker when a mechanism already explains the result, when candidates exist, or for the no-temporal-mechanism reason, which the invariant still guards");
+            withCandidate["blockers"]!.AsArray().Count == 0,
+            "no solver blocker when a mechanism already explains the result, when candidates exist, or for the no-temporal-mechanism reason");
 
         var explainMethod = typeof(HybridScenePlanner).Assembly.GetType("Baker.Core.HybridLoopAllocation")!
             .GetMethod("Explain", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;

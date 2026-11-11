@@ -13,11 +13,11 @@ public sealed record AbbaOptions(string WallpaperEngine, string Original, string
 /// <summary>
 /// 官方 WPE 播放功耗的 A/B/B/A 编排：记下该显示器当前壁纸，逐段打开原作/成品（或暂停作空闲基线）、等稳定、
 /// 调 <see cref="OfficialPerformanceSampler"/> 采样，最后重开原壁纸并按明确指定的状态播放或暂停；不读取先前暂停状态或播放位置。
-/// 判定口径同 2026-09-18 的 A/B/B/A 实测：核显域中位功耗降幅 ≥30% 算省电，升幅 >5% 算更费，其余持平。
+/// 核显域中位功耗降幅 ≥10% 算省电，升幅 >5% 算更费，其余持平。10% 取自 2026-11 三批重复实测：同一张壁纸的降幅在批次间相差不到 8 个百分点。
 /// </summary>
 public static class Abba
 {
-    internal const double SavedPercent = 30, WorsePercent = 5;
+    internal const double SavedPercent = 10, WorsePercent = 5;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     /// <summary>实际执行的段序：有空闲基线时首尾各包一段 I。</summary>

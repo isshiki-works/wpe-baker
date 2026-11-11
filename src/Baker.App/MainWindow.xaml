@@ -171,6 +171,9 @@
                                     <CheckBox x:Name="LayeredVideoBox" Checked="SettingsChanged" Unchecked="SettingsChanged"
                                         ToolTip="部分壁纸只能生成分层视频；分层视频的省电效果未经实测。‖Some wallpapers can only be generated as layered video; its power saving has not been measured.">
                                         <TextBlock Tag="允许分层视频|Allow layered video"/></CheckBox>
+                                    <CheckBox x:Name="NoBenefitBox" Checked="SettingsChanged" Unchecked="SettingsChanged"
+                                        ToolTip="默认不生成预计不省电的方案。勾选后重新分析，仍会生成。‖Plans not expected to save power are skipped by default. Tick this and analyze again to generate anyway.">
+                                        <TextBlock Tag="预计不省电也生成|Generate even when no power saving is expected"/></CheckBox>
                                     <CheckBox x:Name="AudioEffectsBox" Visibility="Collapsed" Checked="SettingsChanged" Unchecked="SettingsChanged"
                                         ToolTip="灯光不再随音乐变化。‖Lighting no longer follows the music.">
                                         <TextBlock Tag="禁用音频响应光效|Disable audio-driven lighting"/></CheckBox>

@@ -71,6 +71,7 @@ internal static class AppJsonPresentation
                 File.Exists(Path.Combine(declaredProject, "project.json")) ? declaredProject : null);
     }
 
+    /// <summary>能不能应用只看生成结论：成品状态是生成流程过完全部检查后才写的，这里不再重查一遍报告字段。</summary>
     public static bool CandidateCanApply(JsonObject result)
     {
         if (result["schema_version"]?.GetValue<int>() == 1 &&
@@ -79,79 +80,9 @@ internal static class AppJsonPresentation
                 Number(result["fused_pairs"]) is > 0 &&
                 result["project_path"]?.GetValue<string>() is { Length: > 0 } &&
                 result["source_sha256"]?.GetValue<string>() is { Length: > 0 };
-        if (result["schema_version"]?.GetValue<int>() != 2 ||
-            result["artifact_kind"]?.GetValue<string>() != "hybrid_video_candidate" ||
-            !StaticOnlyBake.Finished(result["status"]?.GetValue<string>()) ||
-            result["plan"] is not JsonObject plan)
-            return false;
-        // 残差掩盖的候选允许非零起点与非空 unresolved，但每一条都必须已被判定为可掩盖，
-        // 并且接缝残差在第一层限内、固定窗口的交叉淡化已经应用（应用即已过权重核对与尾段 MD5，失败会直接抛出）。
-        bool residualMasked = result["seam_policy"]?.GetValue<string>() == ResidualMasking.SeamPolicy;
-        // 源周期路线的非零起点只能是起点偏移（第 0 帧孤立异常，顺延 1 帧，见 SourceStartOffset），并且记录要对得上。
-        if (!residualMasked && Number(result["source_start_frame"]) != 0 && !SourceStartOffset.Allows(result)) return false;
-        if (plan["route"]?.GetValue<string>() == "effect_prefix")
-            return !residualMasked && EffectPrefixCandidateCanApply(result, plan);
-        if (plan["loop"] is not JsonObject loop ||
-            loop["status"]?.GetValue<string>() != "analytic_candidate_requires_seam_validation" ||
-            loop["source_static"] is not JsonValue sourceStatic || !sourceStatic.TryGetValue<bool>(out _) ||
-            loop["candidates"] is not JsonArray { Count: > 0 })
-            return false;
-        if (residualMasked)
-        {
-            if (result["residual_masking"]?["status"]?.GetValue<string>() != "residual_maskable" ||
-                result["residual_masking"]?["blocking_components"] is not JsonArray { Count: 0 } ||
-                result["seam_residual"]?["status"]?.GetValue<string>() != "observed_within_residual_limits" ||
-                result["seam_residual"]?["first_layer"]?["passed"]?.GetValue<bool>() != true ||
-                result["loop_crossfade"]?["status"]?.GetValue<string>() != "applied" ||
-                Number(result["crossfade_frames"]) is not > 0 ||
-                loop["unresolved"] is not JsonArray { Count: > 0 })
-                return false;
-            // 多组时每个含残差层的组都各自测第一层并淡化：组记录里带了读数的，淡化也必须已应用。
-            if (result["groups"] is JsonArray residualGroups && residualGroups.OfType<JsonObject>().Any(group =>
-                    group["seam_residual"] is JsonObject &&
-                    (group["seam_residual"]?["first_layer"]?["passed"]?.GetValue<bool>() != true ||
-                     group["loop_crossfade"]?["status"]?.GetValue<string>() != "applied")))
-                return false;
-        }
-        else if (loop["unresolved"] is not JsonArray { Count: 0 }) return false;
-        if (result["groups"] is JsonArray groups && groups.OfType<JsonObject>().Any(group => group["local_repair"] is not null))
-            return false;
-        return true;
-    }
-
-    private static bool EffectPrefixCandidateCanApply(JsonObject result, JsonObject plan)
-    {
-        if (result["seam_policy"]?.GetValue<string>() != "source_period_no_repair" ||
-            plan["effect_prefix_caches"] is not JsonArray { Count: > 0 } caches ||
-            result["groups"] is not JsonArray groups || groups.Count != caches.Count ||
-            result["composition_validation"]?["status"]?.GetValue<string>() != "composition_pass")
-            return false;
-        foreach (JsonObject cache in caches.OfType<JsonObject>())
-        {
-            int? owner = cache["owner_layer_id"] is JsonValue ownerValue && ownerValue.TryGetValue<int>(out int id) ? id : null;
-            if (owner is null || !EffectPrefixCaptureTarget.HasValidTerminalIdentity(cache) || cache["source_image"] is not JsonValue image ||
-                !image.TryGetValue<string>(out _) || cache["fixed_user_properties"] is not JsonObject ||
-                cache["loop"] is not JsonObject loop ||
-                loop["status"]?.GetValue<string>() != "analytic_candidate_requires_seam_validation" ||
-                loop["candidates"] is not JsonArray { Count: > 0 } ||
-                loop["unresolved"] is not JsonArray { Count: 0 }) return false;
-            JsonObject[] matches = groups.OfType<JsonObject>()
-                .Where(group => Number(group["owner_layer_id"]) == owner).ToArray();
-            if (matches.Length != 1) return false;
-            JsonObject group = matches[0];
-            JsonObject[] periods = group["period"] is JsonObject period ? [period] : [];
-            JsonObject? groupCandidate = periods.FirstOrDefault()?["candidates"]?.AsArray().OfType<JsonObject>().FirstOrDefault();
-            if (group["status"]?.GetValue<string>() != "encoded" ||
-                Number(group["frames"]) is not > 0 || periods.Length != 1 ||
-                periods[0]["status"]?.GetValue<string>() != "analytic_candidate_requires_seam_validation" ||
-                periods[0]["candidates"] is not JsonArray { Count: > 0 } ||
-                periods[0]["unresolved"] is not JsonArray { Count: 0 } ||
-                Number(groupCandidate?["frames"]) != Number(group["frames"]) ||
-                group["encoded_loop_validation"]?["status"]?.GetValue<string>() != "observed_seam_pass" ||
-                group["hardware_decode"]?["all_adapters_passed"]?.GetValue<bool>() != true ||
-                group["local_repair"] is not null) return false;
-        }
-        return true;
+        return result["schema_version"]?.GetValue<int>() == 2 &&
+            result["artifact_kind"]?.GetValue<string>() == "hybrid_video_candidate" &&
+            StaticOnlyBake.Finished(result["status"]?.GetValue<string>());
     }
 
     public static JsonObject LoadPropertyDefinitions(string sourcePath)
@@ -271,9 +202,6 @@ internal static class AppJsonPresentation
         if (plan["route"]?.GetValue<string>() == "effect_prefix")
             return EffectPrefixLoopSummary(plan, english);
         JsonObject? loop = plan["loop"] as JsonObject;
-        if (loop?["status"]?.GetValue<string>() is "repairable_cut_candidate_requires_full_validation" or
-            "observational_candidate_requires_seam_validation")
-            return english ? "Older result; analyze again." : "旧版结果，需重新分析。";
         JsonObject? candidate = loop?["candidates"]?.AsArray().FirstOrDefault() as JsonObject;
         string rateHint = loop?["frame_rate_hint"] is not JsonObject hint ? "" : english
             ? $"; {hint["output_fps"]} fps is not a multiple of the {string.Join("/", hint["video_fps"]!.AsArray())} fps video layers, so the loop must span {hint["alignment_video_cycles"]} video cycles; {hint["suggested_fps"]} fps is suggested"

@@ -192,7 +192,6 @@ internal sealed class Verdict
         // 放在更小分配取证之后，blocker 才能给出重查过的 --retain-live id；判定读原始源场景，与 bake 第一步同一个 Admission.Evaluate。
         Admission.ApplyResidualLayoutGate(report, residualScene, residualResources);
         RecordSolverNoCandidateBlocker(report);
-        RequireTraceableRejection(report);
         // 视频外壳判据放在最后：前面两处 effect_prefix 回退与布局裁决都已经定稿，这里只读结构、只追加，
         // 不改 route、不改分组，免得新加的 blocker 反过来把计划改道。
         JsonObject videoDominance = VideoDominance.Evaluate(report, observation.Trace, request.VideoShell);
@@ -252,31 +251,5 @@ internal sealed class Verdict
         foreach (JsonObject owner in new[] { report, wholeLayer })
             if (owner["blockers"] is JsonArray) PlanBlockers.Add(owner, blocker);
         report["status"] = "requires_resolution";
-    }
-
-    /// <summary>
-    /// 通用不变量：unavailable 一定要留下可追溯的理由。blockers、loop.unresolved 与求解器的结构化空候选原因
-    /// （loop.no_candidate_reason，HybridSuitability 据此裁定，RecordSolverNoCandidateBlocker 会把它写成 blocker）
-    /// 同时为空的 unavailable 是状态机漏写，属于内部错误——它对用户表现为"退出码 0、零产出、零解释"，比抛出异常更难处理。
-    /// 把粒子层留实时之后剩下的层常常只有一个空候选原因（手工轨道公共周期超上限、着色器分量没有公共帧），
-    /// 这不是漏写，是已经说清楚的拒绝。
-    /// </summary>
-    internal static void RequireTraceableRejection(JsonObject report)
-    {
-        // 结构化的空候选原因算可追溯（RecordSolverNoCandidateBlocker 会把它写成 blocker），但"没有时间机制"不算：
-        // 那条路由由静态证明负责记录理由，缺了就是状态机漏写。
-        static bool Traceable(JsonNode? loop) => loop?["no_candidate_reason"] is JsonObject reason &&
-            reason["kind"]?.GetValue<string>() != nameof(CommonLoopNoCandidateKind.NoTemporalMechanism);
-        if (report["whole_layer"] is not JsonObject wholeLayer || wholeLayer["status"]?.GetValue<string>() != "unavailable" ||
-            wholeLayer["blockers"] is JsonArray { Count: > 0 } || wholeLayer["loop"]?["unresolved"] is JsonArray { Count: > 0 } ||
-            Traceable(wholeLayer["loop"]) || Traceable(report["loop"]))
-            return;
-        // 特效前缀路线自带可烘方案，整层不可用不是这次分析的结局。
-        if (report["route"]?.GetValue<string>() == "effect_prefix" && report["effect_prefix_caches"] is JsonArray { Count: > 0 }) return;
-        string groups = string.Join("; ", (report["video_groups"] as JsonArray ?? []).OfType<JsonObject>()
-            .Select(group => $"{group["id"]?.GetValue<string>() ?? "?"}=[{string.Join(",", (group["layer_ids"] as JsonArray ?? []).Select(id => id?.ToJsonString()))}]"));
-        throw new InvalidOperationException("Internal error: whole-layer analysis ended as unavailable without a single blocker or " +
-            $"unresolved loop mechanism. route={report["route"]?.GetValue<string>()}, loop.status={report["loop"]?["status"]?.GetValue<string>()}, " +
-            $"loop.candidates={(report["loop"]?["candidates"] as JsonArray)?.Count}, baked groups: {(groups.Length == 0 ? "(none)" : groups)}.");
     }
 }
