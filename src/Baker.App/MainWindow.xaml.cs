@@ -364,7 +364,7 @@ public partial class MainWindow : Window
 
     /// <summary>高级区（画面取舍 + 循环周期调节）是不是还停在当前档位的默认值上。</summary>
     private bool AdvancedIsCustom() =>
-        advancedSettingsEdited || LayeredVideoBox.IsChecked == true || AudioEffectsBox.IsChecked == true ||
+        advancedSettingsEdited || LayeredVideoBox.IsChecked == true || NoBenefitBox.IsChecked == true || AudioEffectsBox.IsChecked == true ||
         excludedLayerIds.Count > 0 || analysisPreviewOverrides.Count > 0 ||
         RetimeBox.IsChecked != true ||
         !RetimeBudgetFollowsPreset;
@@ -459,10 +459,11 @@ public partial class MainWindow : Window
             }
             JsonObject definitions = sourceState.Definitions;
             SettingsPreset preset;
+            // 别的壁纸存的设置也能用：生成设置照常载入，壁纸属性对不上这张壁纸，不带过来。
+            bool foreign = !string.Equals(sourceState.Hash, (document["source"]?["sha256"] as JsonValue)?.ToString(), StringComparison.OrdinalIgnoreCase);
+            if (foreign) document["properties"] = new JsonObject();
             try { preset = SettingsPreset.Parse(document, definitions); }
             catch (InvalidDataException) { throw new InvalidDataException(L("设置文件无效。", "Invalid settings file.")); }
-            if (!string.Equals(sourceState.Hash, preset.SourceSha256, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException(L("设置文件属于另一个壁纸。", "These settings belong to another wallpaper."));
             VulkanDeviceInfo? gpu = preset.Settings.DeviceUuid is null ? null : GpuBox.Items.OfType<VulkanDeviceInfo>()
                 .FirstOrDefault(device => device.DeviceUuid.Equals(preset.Settings.DeviceUuid, StringComparison.OrdinalIgnoreCase));
             if (preset.Settings.DeviceUuid is not null && gpu is null) throw new InvalidDataException(L("设置文件指定的显卡不可用。", "The GPU in the settings file isn't available."));
@@ -493,7 +494,9 @@ public partial class MainWindow : Window
             analysisCancellation?.Cancel(); hybridPlan = null;
             ++settingsRevision;
             BuildPropertyEditors(); UpdatePlanSummary(); RefreshControls();
-            StatusText.Text = L("设置已载入，生成前需重新分析。", "Settings loaded; analyze again before generating.");
+            StatusText.Text = foreign
+                ? L("已载入另一个壁纸的生成设置，壁纸属性未载入。生成前需重新分析。", "Loaded generation settings saved for another wallpaper; its wallpaper properties were not loaded. Analyze again before generating.")
+                : L("设置已载入，生成前需重新分析。", "Settings loaded; analyze again before generating.");
         }
         catch (Exception error) { StatusText.Text = L("设置载入失败：", "Couldn't load settings: ") + error.Message; }
         finally { presetBusy = false; RefreshControls(); }
@@ -525,7 +528,7 @@ public partial class MainWindow : Window
             // 剩余实时图层保留原遮挡顺序、简化文字效果固定 preserve（界面已移除这两个开关）。
             var options = AnalyzeOptions.ForDesktop(SelectedPreset(), SelectedInteraction(), RetimeBox.IsChecked == true,
                 LayeredVideoBox.IsChecked == true, AudioEffectsBox.IsChecked == true, excludedLayerIds, RetimeBudgetOverride(),
-                AdvancedIsCustom(), width, height, gpu?.DeviceUuid);
+                AdvancedIsCustom(), width, height, gpu?.DeviceUuid) with { AllowNoBenefit = NoBenefitBox.IsChecked == true };
             var request = AnalyzeRequestFactory.Build(options, source, assets, output, properties, propertiesOrigin, numerator, denominator,
                 // 帧率框还是启动时算出的默认值就记 auto（连同依据），用户改过就记 explicit。
                 (autoFrameRate is { } automatic && denominator == 1 && numerator == automatic.Fps

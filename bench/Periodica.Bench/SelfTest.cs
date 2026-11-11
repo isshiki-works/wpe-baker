@@ -119,8 +119,8 @@ internal static class SelfTest
         closed["test"]!["setting"] = 43;
         Check(!WpeControl.OnlyMonitorRemoved(config, closed, "test"), "own close does not authorize overwriting another config change");
 
-        Check(Abba.Gain(10, 6.9, null)["verdict"]?.GetValue<string>() == "saved", "31% lower is saved");
-        Check(Abba.Gain(10, 7.1, null)["verdict"]?.GetValue<string>() == "same", "29% lower is level");
+        Check(Abba.Gain(10, 8.9, null)["verdict"]?.GetValue<string>() == "saved", "11% lower is saved");
+        Check(Abba.Gain(10, 9.1, null)["verdict"]?.GetValue<string>() == "same", "9% lower is level");
         Check(Abba.Gain(10, 10.6, null)["verdict"]?.GetValue<string>() == "worse", "6% higher is worse");
         Check(Abba.Gain(null, 5, null)["status"]?.GetValue<string>() == "not_measured", "missing original gives no verdict");
         // 空闲 4 W：原作增量 6 W、成品增量 3 W → 降 50%；不扣基线只降 30%，判定口径不同。

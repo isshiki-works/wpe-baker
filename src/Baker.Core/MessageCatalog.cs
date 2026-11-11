@@ -1098,9 +1098,6 @@ public static class MessageCatalog
         ["progress.observing_scene"] = new(
             Zh: "正在分析壁纸…",
             En: "Analyzing the wallpaper…"),
-        ["progress.refreshing_script_fault_evidence"] = new(
-            Zh: "正在更新旧版分析结果…",
-            En: "Updating an older analysis…"),
         // {0}=组 {1}=预热帧数 {2}=步长帧数 {3}=搜索窗帧数
         ["progress.searching_loop_start"] = new(
             Zh: "正在选择循环起点…",

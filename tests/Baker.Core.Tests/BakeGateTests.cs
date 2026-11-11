@@ -220,8 +220,7 @@ public class BakeGateTests : IDisposable
             plan["source_script_errors"] = new JsonArray(new JsonObject { ["owner_layer_id"] = owner });
             return plan;
         }
-        // tools 指向不存在的程序：放行与拒绝都不能走到重新分析。
-        var gate = new ScriptEvidenceGate(new("not-started", "not-started", "not-started", []));
+        var gate = new ScriptEvidenceGate();
         Assert.Null(await gate.CheckAsync(Context(Evidence(5)), Ct));
         await Assert.ThrowsAsync<InvalidDataException>(() => gate.CheckAsync(Context(Evidence(6)), Ct));
     }

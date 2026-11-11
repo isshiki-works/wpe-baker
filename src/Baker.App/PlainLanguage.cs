@@ -30,7 +30,8 @@ internal static class PlainLanguage
     public static string Verdict(JsonObject? plan, bool english)
     {
         if (plan is null) return "";
-        if (NoBenefitExpected(plan) || CannotBake(plan)) return L(english, "不支持", "Not supported");
+        if (NoBenefitExpected(plan)) return L(english, "预计不省电", "No power saving expected");
+        if (CannotBake(plan)) return L(english, "不支持", "Not supported");
         string? value = plan[BakeValueAssessment.Field]?["status"]?.GetValue<string>();
         if (value == "potential_gain") return L(english, "可以生成", "Ready to generate");
         if (value == "low_value") return L(english, "可以生成，预计省电较少", "Ready to generate, small power saving expected");
@@ -38,12 +39,13 @@ internal static class PlainLanguage
         return L(english, "可以生成", "Ready to generate");
     }
 
-    /// <summary>分析判定预计不省电：界面上一律不生成（只有命令行 --no-benefit allow 能覆盖）。</summary>
+    /// <summary>分析判定预计不省电：默认不生成，勾选“预计不省电也生成”（同命令行 --no-benefit allow）后重新分析即可生成。</summary>
     public static bool NoBenefitExpected(JsonObject? plan) => plan?[NoBenefit.Field]?["status"]?.GetValue<string>() == NoBenefit.ExpectedStatus;
 
     /// <summary>结论第二行：固定一句；命中的条件（主因）进"详情"。</summary>
     public static string NoBenefitLine(bool english) =>
-        L(english, "此方案预计无法降低播放开销", "This plan is not expected to reduce playback cost.");
+        L(english, "此方案预计无法降低播放开销。仍要生成，请在“高级”里勾选“预计不省电也生成”后重新分析。",
+            "This plan is not expected to reduce playback cost. To generate anyway, tick “Generate even when no power saving is expected” under Advanced and analyze again.");
 
     /// <summary>
     /// 不支持时的结论第二行：与摘要同一个理由（<see cref="PlanNarrative.SuitabilityReason"/>）；

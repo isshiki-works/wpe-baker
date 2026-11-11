@@ -64,7 +64,7 @@ internal static class BakeGates
     /// </summary>
     internal static IBakeGate[] Preflight(NativeTools tools) =>
     [
-        new ScriptEvidenceGate(tools), new LoopAdmissionGate(), new LoopFramesGate(), new DiskBudgetGate(), new ParticleCycleGate()
+        new ScriptEvidenceGate(), new LoopAdmissionGate(), new LoopFramesGate(), new DiskBudgetGate(), new ParticleCycleGate()
     ];
 
     /// <summary>

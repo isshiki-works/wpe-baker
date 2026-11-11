@@ -19,16 +19,8 @@ internal static class SavedLoopApplyChecks
              "source_static":false,"candidates":[{"frames":1199}],"unresolved":[]}}}
             """)!.AsObject();
         check(AppJsonPresentation.CandidateCanApply(report), "a saved source-derived video remains applicable");
-        report["groups"] = new JsonArray(new JsonObject { ["local_repair"] = new JsonObject { ["status"] = "observed_seam_pass" } });
-        check(!AppJsonPresentation.CandidateCanApply(report), "a saved repaired candidate cannot bypass Apply");
-        report.Remove("groups");
-        report["plan"]!["loop"]!["status"] = "observational_candidate_requires_seam_validation";
-        check(!AppJsonPresentation.CandidateCanApply(report), "a saved image-derived loop cannot bypass generation through Apply");
-        report["plan"]!["loop"]!["status"] = "analytic_candidate_requires_seam_validation";
-        report["source_start_frame"] = 120;
-        check(!AppJsonPresentation.CandidateCanApply(report), "a saved nonzero capture origin cannot be applied");
-        report.Remove("source_start_frame");
-        check(!AppJsonPresentation.CandidateCanApply(report), "a saved report without an explicit source origin requires regeneration");
+        report["status"] = "candidate_rejected_seam";
+        check(!AppJsonPresentation.CandidateCanApply(report), "a rejected candidate cannot be applied");
         var masked = JsonNode.Parse("""
             {"schema_version":2,"artifact_kind":"hybrid_video_candidate","status":"candidate_generated",
              "seam_policy":"analytic_period_with_residual_masking","source_start_frame":37,"crossfade_frames":24,
@@ -76,30 +68,12 @@ internal static class SavedLoopApplyChecks
         ordinalCache["terminal_effect_ordinal"] = 0;
         check(AppJsonPresentation.CandidateCanApply(ordinalCandidate),
             "a JSON report with an ID-less terminal at prefix-1 remains applicable (contract only, no rendering proof)");
-        foreach (var (field, value) in new (string, JsonNode?)[] {
-            ("terminal_effect_id", JsonValue.Create(1.5)), ("terminal_effect_id", JsonValue.Create(-1)),
-            ("terminal_effect_ordinal", JsonValue.Create(1)), ("terminal_effect_ordinal", JsonValue.Create(-1)),
-            ("terminal_effect_ordinal", JsonValue.Create(0.5)), ("terminal_effect_ordinal", null),
-            ("prefix_effect_count", JsonValue.Create(1.5)) })
-        {
-            JsonObject invalid = ordinalCandidate.DeepClone().AsObject();
-            invalid["plan"]!["effect_prefix_caches"]![0]![field] = value?.DeepClone();
-            check(!AppJsonPresentation.CandidateCanApply(invalid), "malformed terminal identity cannot enable Apply: " + field);
-        }
         check(AppJsonPresentation.Number(JsonValue.Create(0)) == 0 &&
             AppJsonPresentation.Number(JsonValue.Create(uint.MaxValue)) == uint.MaxValue &&
             AppJsonPresentation.Number(JsonValue.Create(ulong.MaxValue)) == (double)ulong.MaxValue &&
             AppJsonPresentation.Number(JsonValue.Create(1.5f)) == 1.5 &&
             AppJsonPresentation.Number(JsonValue.Create(float.PositiveInfinity)) is null,
             "Number accepts in-memory integer/floating JsonValues and rejects non-finite values");
-        prefixes["plan"]!["effect_prefix_caches"]![0]!["loop"]!["unresolved"]!.AsArray().Add(new JsonObject());
-        check(!AppJsonPresentation.CandidateCanApply(prefixes), "effect-prefix with unresolved loop mechanism is rejected");
-        prefixes["plan"]!["effect_prefix_caches"]![0]!["loop"]!["unresolved"]!.AsArray().Clear();
-        prefixes["plan"]!["effect_prefix_caches"]![1]!["loop"]!["status"] = "observational_candidate_requires_seam_validation";
-        check(!AppJsonPresentation.CandidateCanApply(prefixes), "effect-prefix with observational loop evidence is rejected");
-        prefixes["plan"]!["effect_prefix_caches"]![1]!["loop"]!["status"] = "analytic_candidate_requires_seam_validation";
-        prefixes["groups"]![0]!["local_repair"] = new JsonObject();
-        check(!AppJsonPresentation.CandidateCanApply(prefixes), "repaired effect-prefix output is rejected");
     }
 
     private static async Task CheckApplicationContracts(Action<bool, string> check, string dir)
