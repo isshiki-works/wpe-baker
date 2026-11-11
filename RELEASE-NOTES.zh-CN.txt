@@ -1,6 +1,15 @@
-# WPE Baker 2.1.1 · 修复渲染器崩溃，分析更快
+# WPE Baker 2.1.2 · 放宽几处过严的限制
 
-WPE Baker 将 Wallpaper Engine 场景中的周期动画生成首尾衔接的视频循环，时钟、音乐响应等实时内容可以继续保留在场景中。2.1.1 修复 2.1.0 中的一处渲染器崩溃，并加快图层较多的场景的分析。
+WPE Baker 将 Wallpaper Engine 场景中的周期动画生成首尾衔接的视频循环，时钟、音乐响应等实时内容可以继续保留在场景中。2.1.2 放宽了几处过严的限制。
+
+## 2.1.2 的变化
+
+- 预计不省电的壁纸现在也可以生成：在“高级”里勾选“预计不省电也生成”，重新分析后即可生成。
+- 保存的设置可以载入到别的壁纸上使用。
+- 生成前要求的磁盘剩余空间减少 8 GB。
+- 载入已有输出时，生成成功的结果都可以应用到 Wallpaper Engine。
+- `compare`：功耗降幅达到 10% 即判定为更省电。
+- 项目地址改为 github.com/isshiki-works/wallpaper-engine-baker，旧地址会自动跳转。
 
 ## 2.1.1 的变化
 
@@ -39,6 +48,6 @@ WPE Baker 将 Wallpaper Engine 场景中的周期动画生成首尾衔接的视�
 
 ## 安装
 
-将 WpeBaker-2.1.1-win-x64.zip 完整解压到有写入权限的目录，运行 WpeBaker.exe。需要 Windows 10/11 x64、Wallpaper Engine（Steam 版）和支持 Vulkan 的显卡，无需另装 .NET、Python 或 FFmpeg。分析、生成、预览、应用与导出沿用现有流程，保留的实时图层继续由 Wallpaper Engine 运行。
+将 WpeBaker-2.1.2-win-x64.zip 完整解压到有写入权限的目录，运行 WpeBaker.exe。需要 Windows 10/11 x64、Wallpaper Engine（Steam 版）和支持 Vulkan 的显卡，无需另装 .NET、Python 或 FFmpeg。分析、生成、预览、应用与导出沿用现有流程，保留的实时图层继续由 Wallpaper Engine 运行。
 
-对应的 WpeBaker-2.1.1-source.zip 包含依赖源码、许可声明、准确对应的原生构建记录和 REBUILD.md。两份压缩包需一起提供，SHA256 见 SHA256SUMS.txt。应用与开发脚本使用 MIT 许可，离线渲染器使用 GPL-2.0，附带依赖保留各自的许可。
+对应的 WpeBaker-2.1.2-source.zip 包含依赖源码、许可声明、准确对应的原生构建记录和 REBUILD.md。两份压缩包需一起提供，SHA256 见 SHA256SUMS.txt。应用与开发脚本使用 MIT 许可，离线渲染器使用 GPL-2.0，附带依赖保留各自的许可。

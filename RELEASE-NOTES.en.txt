@@ -1,6 +1,15 @@
-# WPE Baker 2.1.1 · Renderer crash fix and faster analysis
+# WPE Baker 2.1.2 · Fewer overly strict limits
 
-WPE Baker turns repeating animation in Wallpaper Engine scenes into seamless video loops, while clocks, music response and other live content can continue running in the scene. Version 2.1.1 fixes a renderer crash in 2.1.0 and speeds up analysis of scenes with many layers.
+WPE Baker turns repeating animation in Wallpaper Engine scenes into seamless video loops, while clocks, music response and other live content can continue running in the scene. Version 2.1.2 relaxes several limits that were stricter than they needed to be.
+
+## Changes in 2.1.2
+
+- Wallpapers that are not expected to save power can now be generated: tick “Generate even when no power saving is expected” under Advanced, then analyze again.
+- Saved settings can be loaded for a different wallpaper.
+- Generation needs 8 GB less free disk space before it starts.
+- When loading existing output, every successfully generated result can be applied to Wallpaper Engine.
+- `compare`: a power reduction of 10% or more now counts as a saving.
+- The project has moved to github.com/isshiki-works/wallpaper-engine-baker; the old address redirects.
 
 ## Changes in 2.1.1
 
@@ -39,6 +48,6 @@ Across 24 scenes (12 wallpapers at 1920×1080 and 3840×2160, 60 FPS simulation 
 
 ## Installation
 
-Extract the complete WpeBaker-2.1.1-win-x64.zip archive into a writable folder and run WpeBaker.exe. Windows 10/11 x64, Wallpaper Engine from Steam and a Vulkan-capable GPU are required. .NET, Python and FFmpeg do not need to be installed separately. Analysis, generation, preview, apply and export use the existing workflow; retained live layers continue to run in Wallpaper Engine.
+Extract the complete WpeBaker-2.1.2-win-x64.zip archive into a writable folder and run WpeBaker.exe. Windows 10/11 x64, Wallpaper Engine from Steam and a Vulkan-capable GPU are required. .NET, Python and FFmpeg do not need to be installed separately. Analysis, generation, preview, apply and export use the existing workflow; retained live layers continue to run in Wallpaper Engine.
 
-The matching WpeBaker-2.1.1-source.zip contains dependency sources, notices, exact native build records and REBUILD.md. Distribute both archives together; their SHA256 values are listed in SHA256SUMS.txt. The application and developer scripts use MIT; the offline renderer uses GPL-2.0, and bundled dependencies retain their own licenses.
+The matching WpeBaker-2.1.2-source.zip contains dependency sources, notices, exact native build records and REBUILD.md. Distribute both archives together; their SHA256 values are listed in SHA256SUMS.txt. The application and developer scripts use MIT; the offline renderer uses GPL-2.0, and bundled dependencies retain their own licenses.
