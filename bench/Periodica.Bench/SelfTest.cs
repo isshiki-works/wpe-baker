@@ -161,6 +161,9 @@ internal static class SelfTest
         Check(Abba.Compare(saved)["choice"]?.GetValue<string>() == "unavailable", "material displayed-frame loss withholds a choice");
         saved["segments"]![0]!["displayed_fps"] = 59.98;
         Check(Abba.Compare(saved)["choice"]?.GetValue<string>() == "baked", "59.98 of 60 in a finite 900-frame sample passes");
+        saved["segments"]![0]!["displayed_fps"] = 59.96;
+        Check(Abba.Compare(saved)["choice"]?.GetValue<string>() == "baked", "a panel refreshing 0.07% under nominal with zero drops passes");
+        saved["segments"]![0]!["displayed_fps"] = 59.98;
         Check(Abba.Compare(Comparison(0.001, 0.002))["choice"]?.GetValue<string>() == "unavailable",
             "idle-scale iGPU telemetry cannot impersonate discrete-GPU playback cost");
         var fallback = Comparison(10, 6);

@@ -20,7 +20,7 @@
 
 <div class="wrap">
 <nav>
-  <div class="logo">PERIODICA<small>WPE BAKER · 2.1.0</small></div>
+  <div class="logo">PERIODICA<small>WPE BAKER · 2.1.1</small></div>
   <div class="links"><a href="#loop">循环</a><a href="#numbers">实测数据</a><a href="#refresh">刷新率</a><a href="#gui">工具</a><a href="#astra">技术实现</a><a href="#roadmap">路线图</a></div>
   <div class="lang"><a href="index.html" onclick="try{localStorage.setItem('lang','en')}catch(e){}">EN</a><a href="zh.html" aria-current="page" onclick="try{localStorage.setItem('lang','zh')}catch(e){}">中文</a></div>
 </nav>
@@ -31,14 +31,14 @@
     <h1>你的壁纸一直在实时渲染。<br><span>烘焙一次就够了。</span></h1>
     <p class="lead">Periodica 分析 Wallpaper Engine 场景，通过数学建模协调其中可烘焙动画的周期，让画面形成首尾衔接的循环，再以视频形式播放。时钟、音乐响应等实时内容可以继续保留，在维持动态画面效果的同时，减少重复渲染的开销。它的首个应用是面向 Wallpaper Engine 的 WPE Baker。</p>
     <div class="cta">
-      <a class="btn primary" href="https://github.com/isshiki-works/wpe-baker/releases/tag/v2.1.0">下载 Windows 版</a>
+      <a class="btn primary" href="https://github.com/isshiki-works/wpe-baker/releases/tag/v2.1.1">下载 Windows 版</a>
       <a class="btn ghost" href="#numbers">查看实测数据</a>
     </div>
     <div class="fine" style="margin-top:12px">开源 · 便携版 · 运行时不调用 AI 模型</div>
   </div>
   <div class="screen">
     <video src="site/hero-landscape.mp4" autoplay muted loop playsinline aria-label="示例成品：烘焙后的 50 秒无缝循环"></video>
-    <div class="bar"><span>示例成品 · 烘焙后的循环输出 · Lost Landscape 3（northway）<br><span class="tag">一个经过接缝检查的 50 秒、60 fps 循环，此处播放的文件仅 3.4 MB</span></span><b>−59.2%</b></div>
+    <div class="bar"><span>示例成品 · 烘焙后的循环输出 · Lost Landscape 3（northway）<br><span class="tag">一个经过接缝检查的 50 秒、60 fps 循环，此处播放的文件仅 3.4 MB</span></span><b>−57.2%</b></div>
   </div>
 </div>
 
@@ -62,7 +62,7 @@
   </div>
   <div class="trace" aria-label="原作与烘焙成品的功耗变化示意">
     <div class="hdr"><span>核显功耗 · W · 亚托莉 · 165 FPS</span><span>A / B / B / A · 功耗变化示意</span></div>
-    <svg viewBox="0 0 560 300" role="img" aria-label="原作约 25.6 W，烘焙后约 2.2 W；曲线示意原作与烘焙成品切换时的功耗变化">
+    <svg data-trace="2.1" viewBox="0 0 560 300" role="img" aria-label="原作约 25.6 W，烘焙后约 2.2 W；曲线示意原作与烘焙成品切换时的功耗变化">
       <rect class="band" x="40" y="14" width="120" height="250"></rect>
       <rect class="band" x="300" y="14" width="120" height="250"></rect>
       <text class="bandl" x="100" y="28">A · 原始场景</text>
@@ -75,9 +75,9 @@
       <text class="axl" x="6" y="148">15</text><line class="ax" x1="36" y1="144" x2="40" y2="144"></line>
       <text class="axl" x="12" y="268">0</text>
       <text class="axl" x="438" y="286">播放时间 →</text>
-      <path class="tr-o" d="M40,59.58 L52,58.73 L64,60.44 L76,58.29 L88,60.01 L100,59.15 L112,60.87 L124,58.73 L136,59.58 L148,58.29 L160,60.01 L168,111.14 L176,202.44 L184,240.04 L188,245.62"></path>
-      <path class="tr-o" d="M420,246.48 L424,231.44 L430,164.85 L436,85.36 L442,60.01 L452,58.73 L464,60.01 L476,58.73 L488,60.44 L500,59.15 L512,59.58 L524,58.29 L536,60.01 L548,59.15 L556,59.58"></path>
-      <path class="tr-b" d="M188,245.62 L200,246.48 L212,245.62 L224,246.91 L236,246.05 L248,246.48 L260,245.62 L272,246.91 L284,246.05 L296,246.48 L308,246.05 L320,246.91 L332,245.62 L344,246.48 L356,246.05 L368,246.91 L380,245.62 L392,246.48 L404,246.05 L416,246.91 L420,246.48"></path>
+      <path class="tr-o" d="M40,56.69 L52,55.83 L64,57.56 L76,55.39 L88,57.13 L100,56.26 L112,58.00 L124,55.83 L136,56.69 L148,55.39 L160,57.13 L168,108.85 L176,201.21 L184,239.25 L188,244.89"></path>
+      <path class="tr-o" d="M420,245.76 L424,230.55 L430,163.18 L436,82.77 L442,57.13 L452,55.83 L464,57.13 L476,55.83 L488,57.56 L500,56.26 L512,56.69 L524,55.39 L536,57.13 L548,56.26 L556,56.69"></path>
+      <path class="tr-b" d="M188,244.89 L200,245.76 L212,244.89 L224,246.20 L236,245.33 L248,245.76 L260,244.89 L272,246.20 L284,245.33 L296,245.76 L308,245.33 L320,246.20 L332,244.89 L344,245.76 L356,245.33 L368,246.20 L380,244.89 L392,245.76 L404,245.33 L416,246.20 L420,245.76"></path>
       <text class="axl" x="164" y="50">25.6 W</text>
       <text class="axl" x="244" y="238" style="fill:#0e7f6d">2.2 W · −91%</text>
     </svg>
@@ -97,16 +97,16 @@
 </section>
 
 <section id="gui">
-  <div class="eyebrow">2.0 · 全新界面</div>
+  <div class="eyebrow">界面</div>
   <h2>拖入场景，得到结果。</h2>
-  <p class="sub">2.0 采用先进的液态玻璃美学重新设计界面，将壁纸选择、生成方案和任务队列集中在同一窗口。程序可以自动读取当前壁纸，也支持拖入文件夹或场景文件；分析后调整精度、交互方式和输出规格，生成完成后直接预览、应用或导出成品。</p>
+  <p class="sub">WPE Baker 的界面采用先进的液态玻璃美学设计，将壁纸选择、生成方案和任务队列集中在同一窗口。程序可以自动读取当前壁纸，也支持拖入文件夹或场景文件；分析后调整精度、交互方式和输出规格，生成完成后直接预览、应用或导出成品。</p>
   <div class="tool">
     <div class="steps">
       <div><b>01</b><h3>选择当前壁纸，或拖入场景</h3><p>程序会读取 Wallpaper Engine 当前使用的壁纸。你也可以直接拖入壁纸文件夹或场景文件，开始分析。</p></div>
       <div><b>02</b><h3>查看方案，调整输出</h3><p>分析结果会列出可生成的内容和需要保留的实时部分。动画精度、交互处理、帧率与分辨率都可以在左侧调整，壁纸自身的可调属性也会一并显示。</p></div>
       <div><b>03</b><h3>生成、预览与应用</h3><p>生成任务集中显示在右侧，可以查看进度和检查结果。完成后可在 Wallpaper Engine 中预览、应用到指定屏幕、导出 ZIP，或恢复之前的壁纸。</p></div>
     </div>
-    <figure class="shot"><a class="shot-view" href="site/gui-2.0-zh.png" target="_blank" aria-label="放大查看 WPE Baker 界面"><img src="site/gui-2.0-zh.png" alt="WPE Baker 2.0 液态玻璃界面：场景预览、生成设置与已完成的任务" width="1534" height="1180" loading="lazy"></a><figcaption><span>WPE Baker 2.0 · 场景预览与任务管理。</span><a href="site/gui-2.0-zh.png" target="_blank">放大查看 ↗</a></figcaption></figure>
+    <figure class="shot"><a class="shot-view" href="site/gui-2.1-zh.png" target="_blank" aria-label="放大查看 WPE Baker 界面"><img src="site/gui-2.1-zh.png" alt="WPE Baker 2.1 液态玻璃界面：场景预览、生成设置与已完成的任务" width="1534" height="1180" loading="lazy"></a><figcaption><span>WPE Baker 2.1 · 场景预览与任务管理。</span><a href="site/gui-2.1-zh.png" target="_blank">放大查看 ↗</a></figcaption></figure>
   </div>
 </section>
 
@@ -115,28 +115,28 @@
   <h2>重复的代价。</h2>
   <p class="sub">测试平台为搭载 Intel Arc B390 的笔记本电脑，使用官方 Wallpaper Engine，以 A/B/B/A 顺序对照原始场景与烘焙输出。成品设置为 1920×1080、60 fps，采用平衡精度和默认壁纸属性；原作在 3072×1920 屏幕上正常渲染。核显功耗与 CPU 封装功耗分别记录。</p>
   <div class="gal">
-    <figure><img src="site/thumb-3713073223.jpg" alt="Lost Landscape 3 壁纸预览"><figcaption><b>−59.2%</b>Lost Landscape 3<small>3713073223 · 效果前缀</small></figcaption></figure>
-    <figure><img src="site/thumb-3448877775.jpg" alt="Alone 壁纸预览"><figcaption><b>−12.8%</b>Alone<small>3448877775 · 效果前缀</small></figcaption></figure>
-    <figure><img src="site/thumb-3650475846.jpg" alt="Nijika 壁纸预览"><figcaption><b>−29.9%</b>Nijika<small>3650475846 · 效果前缀</small></figcaption></figure>
-    <figure><img src="site/thumb-3426865175.jpg" alt="Frieren 壁纸预览"><figcaption><b>−31.6%</b>Frieren<small>3426865175 · 效果前缀</small></figcaption></figure>
-    <figure><img src="site/thumb-3669681034.jpg" alt="Atri 壁纸预览"><figcaption><b>−96.8%</b>Atri<small>3669681034 · 效果前缀</small></figcaption></figure>
+    <figure><img src="site/thumb-3713073223.jpg" alt="Lost Landscape 3 壁纸预览"><figcaption><b>−57.2%</b>Lost Landscape 3<small>3713073223 · 效果前缀</small></figcaption></figure>
+    <figure><img src="site/thumb-3448877775.jpg" alt="Alone 壁纸预览"><figcaption><b>−14.7%</b>Alone<small>3448877775 · 效果前缀</small></figcaption></figure>
+    <figure><img src="site/thumb-3650475846.jpg" alt="Nijika 壁纸预览"><figcaption><b>−29.7%</b>Nijika<small>3650475846 · 效果前缀</small></figcaption></figure>
+    <figure><img src="site/thumb-3426865175.jpg" alt="Frieren 壁纸预览"><figcaption><b>−27.0%</b>Frieren<small>3426865175 · 效果前缀</small></figcaption></figure>
+    <figure><img src="site/thumb-3669681034.jpg" alt="Atri 壁纸预览"><figcaption><b>−96.9%</b>Atri<small>3669681034 · 效果前缀</small></figcaption></figure>
     <figure><img src="site/thumb-3685247684.jpg" alt="Ultraman Leo 壁纸预览"><figcaption><b>−84.1%</b>Ultraman Leo<small>3685247684 · 效果前缀 + 实时图层</small></figcaption></figure>
   </div>
   <div class="tablewrap">
   <table>
 <thead><tr><th>壁纸</th><th>原作核显功耗</th><th>烘焙后</th><th>变化</th><th>CPU 封装：原作 → 烘焙后</th></tr></thead>
 <tbody>
-<tr><td>Nijika (Bocchi the Rock!)<span class="id">3650475846</span></td><td class="num">20.87 W</td><td class="num">14.63 W</td><td class="delta">−29.9%</td><td class="num">31.80 → 26.51 W</td></tr>
-<tr><td>Alone（日/夜场景）<span class="id">3448877775</span></td><td class="num">5.52 W</td><td class="num">4.81 W</td><td class="delta">−12.8%</td><td class="num">15.45 → 16.17 W</td></tr>
-<tr><td>Atri — My Dear Moments<span class="id">3669681034</span></td><td class="num">8.51 W</td><td class="num">0.27 W</td><td class="delta">−96.8%</td><td class="num">17.85 → 9.26 W</td></tr>
-<tr><td>Ultraman Leo<span class="id">3685247684</span></td><td class="num">9.08 W</td><td class="num">1.44 W</td><td class="delta">−84.1%</td><td class="num">19.58 → 11.58 W</td></tr>
-<tr><td>Yuri<span class="id">3572877776</span></td><td class="num">2.10 W</td><td class="num">0.48 W</td><td class="delta">−77.4%</td><td class="num">11.59 → 9.45 W</td></tr>
-<tr><td>Frieren — Pagoda of flowers<span class="id">3426865175</span></td><td class="num">10.57 W</td><td class="num">7.23 W</td><td class="delta">−31.6%</td><td class="num">19.62 → 19.64 W</td></tr>
-<tr><td>Lost Landscape 3<span class="id">3713073223</span></td><td class="num">8.10 W</td><td class="num">3.30 W</td><td class="delta">−59.2%</td><td class="num">17.96 → 13.61 W</td></tr>
-<tr><td>Ayanami Rei<span class="id">3258032485</span></td><td class="num">2.16 W</td><td class="num">0.14 W</td><td class="delta">−93.4%</td><td class="num">11.23 → 8.72 W</td></tr>
+<tr><td>Nijika (Bocchi the Rock!)<span class="id">3650475846</span></td><td class="num">20.98 W</td><td class="num">14.74 W</td><td class="delta">−29.7%</td><td class="num">31.13 → 26.95 W</td></tr>
+<tr><td>Alone（日/夜场景）<span class="id">3448877775</span></td><td class="num">5.74 W</td><td class="num">4.90 W</td><td class="delta">−14.7%</td><td class="num">15.08 → 15.03 W</td></tr>
+<tr><td>Atri — My Dear Moments<span class="id">3669681034</span></td><td class="num">8.39 W</td><td class="num">0.26 W</td><td class="delta">−96.9%</td><td class="num">16.11 → 7.94 W</td></tr>
+<tr><td>Ultraman Leo<span class="id">3685247684</span></td><td class="num">8.99 W</td><td class="num">1.43 W</td><td class="delta">−84.1%</td><td class="num">17.87 → 9.71 W</td></tr>
+<tr><td>Yuri<span class="id">3572877776</span></td><td class="num">2.25 W</td><td class="num">0.45 W</td><td class="delta">−80.0%</td><td class="num">10.55 → 8.40 W</td></tr>
+<tr><td>Frieren — Pagoda of flowers<span class="id">3426865175</span></td><td class="num">10.67 W</td><td class="num">7.79 W</td><td class="delta">−27.0%</td><td class="num">20.00 → 18.74 W</td></tr>
+<tr><td>Lost Landscape 3<span class="id">3713073223</span></td><td class="num">8.14 W</td><td class="num">3.48 W</td><td class="delta">−57.2%</td><td class="num">17.13 → 12.84 W</td></tr>
+<tr><td>Ayanami Rei<span class="id">3258032485</span></td><td class="num">2.28 W</td><td class="num">0.13 W</td><td class="delta">−94.4%</td><td class="num">8.85 → 7.15 W</td></tr>
 </tbody></table>
   </div>
-  <div class="note">接电 · 默认壁纸属性 · 平衡精度 · 每段采样 20 秒。表中为 2.0 数据；2.1 复测核显功耗变化：亚托莉 −97.3%、绫波丽 −94.6%、虹夏 −27.1%、Alone −11.3%。页面展示的壁纸美术作品归各自的 Steam Workshop 作者所有。</div>
+  <div class="note">接电 · 默认壁纸属性 · 平衡精度 · 每段采样 20 秒。页面展示的壁纸美术作品归各自的 Steam Workshop 作者所有。</div>
 </section>
 
 <section id="refresh">
@@ -144,9 +144,9 @@
   <h2>高刷照开，功耗更低。</h2>
   <p class="sub">随着播放帧率提高，原始场景需要实时渲染更多画面。将周期动画烘焙为视频后，视频解码器承担这部分播放工作，减少 3D 引擎逐帧重复渲染的负担。时钟、音频响应等保留的实时内容仍然按原有方式运行。<br><br>这个项目最初就是在一台使用 iGPU 的笔记本电脑上开始的。</p>
   <div class="tablewrap"><table><thead><tr><th>壁纸 / 帧率</th><th>原作核显功耗</th><th>烘焙后</th><th>变化</th><th>CPU 封装：原作 → 烘焙后</th></tr></thead><tbody>
-<tr><td>Atri · 60 fps</td><td class="num">8.50 W</td><td class="num">0.30 W</td><td class="delta">−96.5%</td><td class="num">16.53 → 9.33 W</td></tr>
-<tr><td>Atri · 165 fps</td><td class="num">25.55 W</td><td class="num">2.19 W</td><td class="delta">−91.4%</td><td class="num">37.67 → 12.84 W</td></tr>
-<tr><td>Ayanami Rei · 120 fps</td><td class="num">8.75 W</td><td class="num">1.97 W</td><td class="delta">−77.5%</td><td class="num">18.62 → 13.72 W</td></tr>
+<tr><td>Atri · 60 fps</td><td class="num">8.40 W</td><td class="num">0.26 W</td><td class="delta">−96.9%</td><td class="num">16.22 → 8.14 W</td></tr>
+<tr><td>Atri · 165 fps</td><td class="num">25.56 W</td><td class="num">2.24 W</td><td class="delta">−91.2%</td><td class="num">38.30 → 13.77 W</td></tr>
+<tr><td>Ayanami Rei · 120 fps</td><td class="num">8.62 W</td><td class="num">1.50 W</td><td class="delta">−82.6%</td><td class="num">18.00 → 11.56 W</td></tr>
 </tbody></table></div>
   <div class="note">原作与成品均以屏幕原生分辨率输出（3072×1920），官方播放器，接电，A/B/B/A，每段采样 20 秒。</div>
 </section>
@@ -184,7 +184,7 @@
   <div class="spec">
     <div>
       <p>一张 Wallpaper Engine 场景可能包含数百种着色器变体、粒子系统、脚本控制器和视频图层。要把它们烘焙成循环，仅仅寻找两张相似的画面并不足够：程序需要知道动画如何随时间变化，以及哪些内容必须继续响应实时输入。</p>
-      <p>2.0 用着色器时间分析取代了旧版的周期方程库。程序对实际编译得到的 SPIR-V 进行抽象解释，沿数据流追踪时间变量，推导周期、持续漂移，以及经过一段时间后停止变化的动画。不必为每一种新效果单独编写方程，陌生的自定义着色器也可以进入分析。</p>
+      <p>Periodica 用着色器时间分析取代了早期的周期方程库。程序对实际编译得到的 SPIR-V 进行抽象解释，沿数据流追踪时间变量，推导周期、持续漂移，以及经过一段时间后停止变化的动画。不必为每一种新效果单独编写方程，陌生的自定义着色器也可以进入分析。</p>
       <p>求出周期之后，程序还会寻找能够局部调整的参数。一个效果里的水波、光晕和滚动不必再一起加速；程序将会分别协调能够独立调整的运动，彼此独立的视频组也将按各自的周期循环。</p>
       <p>作者脚本同样纳入时间分析。恒定值、周期变化和只在开场发生的动画可以被识别；对于能够精确模拟的跨帧状态，程序会寻找状态重新出现的时刻。真正依赖鼠标、音频和时钟的内容则保留实时运行。</p>
       <p>为了把烘焙结果放回原场景，Periodica 还需要处理透明度、混合顺序和 HDR 中间画面。超出普通视频范围的亮度经过映射存入视频，再由生成的着色器还原，使缓存后的内容能够继续参与作者原有的效果链。</p>
@@ -205,29 +205,29 @@
   <h2>为离线生成重新设计渲染流程</h2>
   <div class="renderer-copy">
       <p>Periodica 在 open-wallpaper-engine 的基础上，重构了场景执行与 Vulkan 离线渲染流程。着色器、脚本、粒子和视频按确定的时间步推进，模拟、绘制与采样分别调度：预热不再反复读回随后丢弃的画面，起点搜索只绘制需要比较的帧，独立的视频组按各自的周期生成。</p>
-      <p>旧版烘焙过程中，透明画面需要经过整帧回读、CPU 扫描、无损母版和二次编码。2.0 将裁剪、透明度处理与循环淡化接入 GPU 流程，再直接送入硬件编码器，减少数据往返、中间文件和重复计算。性能提升来自整条生成流程的改造。</p>
-      <p>在 RTX 5090 D v2 的同场景对照中，4K 完整烘焙耗时由约 <strong>15 分钟缩短至 36 秒，提速约 25 倍</strong>。另一项 4K 长场景测试中，从分析到生成达到 <strong>3.5 倍实时</strong>，约 <strong>3 分钟完成 10 分钟的 4K 60 FPS 动画</strong>。</p>
+      <p>早期版本的烘焙过程中，透明画面需要经过整帧回读、CPU 扫描、无损母版和二次编码。现在裁剪、透明度处理与循环淡化都接入 GPU 流程，再直接送入硬件编码器，减少数据往返、中间文件和重复计算。性能提升来自整条生成流程的改造。</p>
+      <p>在 RTX 5090 D v2 的同场景对照中，4K 完整烘焙耗时由 <strong>108 秒缩短至 17 秒，提速 6 倍以上</strong>。另一项 4K 长场景测试中，从分析到生成达到 <strong>3.7 倍实时</strong>，约 <strong>70 秒完成 4 分 18 秒的 4K 60 FPS 动画</strong>。</p>
   </div>
 </section>
 
 
 <section id="render-benchmark"><div class="bench-layout"><div class="bench-description">
 <div class="eyebrow">实机验证</div><h2>久经磨砺。</h2>
-<div class="bench-copy"><p>为了 2.0 的发布，我们围绕兼容性与生成效率进行了充分打磨：以 <strong>489 张真实创意工坊壁纸</strong>进行兼容性回归，并选取 <strong>12 张不同类型的场景</strong>完成 4K 渲染与视频导出测试。</p><p>在同一批壁纸中，可烘焙场景从 1.0.2 的 <strong>244 张扩展到 440 张</strong>，覆盖率达到 <strong>90.0%</strong>。纳入测试的 <strong>41 张热门作品</strong>中，覆盖数量从 <strong>22 张增加到 37 张</strong>。</p><p>2.1 继续优化共用渲染路径。在同一组 24 个测试场景中，整帧渲染相对 2.0.0 的中位提升为 RTX 5090 D v2 <strong>2.00 倍</strong>、Intel Arc B390 <strong>1.58 倍</strong>，抽检的 3,240 帧与 2.0.0 逐帧一致。</p><p>性能测试以五款开源渲染器的实测结果作为参考。在 RTX 5090 D v2 的 4K 场景测试中，Periodica 2.1 的平均渲染速度为参考结果的 <strong>2.79–6.28 倍</strong>。参考结果测于 2026 年 10 月，本次未重测；视频导出为 2.0 数据，平均 <strong>2.74 倍实时</strong>。</p></div><div id="compatibility" class="bench-compatibility"><table class="bench-coverage"><thead><tr><th>回归覆盖</th><th>1.0.2</th><th>2.0</th></tr></thead><tbody><tr><th scope="row">可烘焙场景</th><td>244 / 489</td><td><strong>440 / 489</strong></td></tr><tr><th scope="row">覆盖率</th><td>49.9%</td><td><strong>90.0%</strong></td></tr><tr><th scope="row">热门作品</th><td>22 / 41</td><td><strong>37 / 41</strong></td></tr></tbody></table></div></div><div class="bench-results">
+<div class="bench-copy"><p>我们围绕兼容性与生成效率进行了充分打磨：以 <strong>489 张真实创意工坊壁纸</strong>进行兼容性回归，并选取 <strong>12 张不同类型的场景</strong>完成 4K 渲染与视频导出测试。</p><p>在同一批壁纸中，可烘焙场景从 1.0.2 的 <strong>244 张扩展到 444 张</strong>，覆盖率达到 <strong>90.8%</strong>。纳入测试的 <strong>41 张热门作品</strong>中，覆盖数量从 <strong>22 张增加到 37 张</strong>。</p><p>2.1 继续优化共用渲染路径。在同一组 24 个测试场景中，整帧渲染相对 2.0.0 的中位提升为 RTX 5090 D v2 <strong>2.00 倍</strong>、Intel Arc B390 <strong>1.58 倍</strong>。</p><p>性能测试以五款开源渲染器的实测结果作为参考。在 RTX 5090 D v2 的 4K 场景测试中，Periodica 的平均渲染速度为参考结果的 <strong>2.72–6.28 倍</strong>，视频导出平均为 <strong>2.79 倍实时</strong>。</p></div><div id="compatibility" class="bench-compatibility"><table class="bench-coverage"><thead><tr><th>回归覆盖</th><th>1.0.2</th><th>2.1</th></tr></thead><tbody><tr><th scope="row">可烘焙场景</th><td>244 / 489</td><td><strong>444 / 489</strong></td></tr><tr><th scope="row">覆盖率</th><td>49.9%</td><td><strong>90.8%</strong></td></tr><tr><th scope="row">热门作品</th><td>22 / 41</td><td><strong>37 / 41</strong></td></tr></tbody></table></div></div><div class="bench-results">
 <div class="bench-hardware">RTX 5090 D v2 <span>4K · 3840×2160</span></div><div class="bench-sheet" tabindex="0" role="region" aria-label="RTX 5090 D v2 的 4K 渲染对比"><table class="bench-overview"><colgroup><col class="bench-scene-column"></colgroup><colgroup span="6"></colgroup><colgroup><col class="bench-export-column"></colgroup><thead><tr><th rowspan="2" scope="col">壁纸</th><th colspan="6" scope="colgroup" class="bench-frame-heading">渲染帧率 / FPS</th><th rowspan="2" scope="col" class="bench-export-heading">Periodica<br>视频导出<small>秒 · 倍实时</small></th></tr><tr><th scope="col">Periodica</th><th scope="col">WebWallGL</th><th scope="col">Almamu</th><th scope="col">Portghost</th><th scope="col">Mac<br>renderer</th><th scope="col">AnisPaper</th></tr></thead><tbody>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3441873795">Kirby</a></th><td class="bench-number bench-ours">537.3</td><td class="bench-number">196.7</td><td class="bench-number">121.6</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-number">151.2</td><td class="bench-number">89.5</td><td class="bench-export bench-number">3.50<small>2.86×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3669681034">亚托莉</a></th><td class="bench-number bench-ours">650.0</td><td class="bench-number">241.6</td><td class="bench-number">166.2</td><td class="bench-number">92.6</td><td class="bench-number">162.0</td><td class="bench-number">98.6</td><td class="bench-export bench-number">3.58<small>2.79×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3258032485">绫波丽</a></th><td class="bench-number bench-ours">720.0</td><td class="bench-number">238.7</td><td class="bench-number">199.6</td><td class="bench-number">139.4</td><td class="bench-number">207.9</td><td class="bench-number">95.4</td><td class="bench-export bench-number">3.31<small>3.03×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3650475846">虹夏</a></th><td class="bench-number bench-ours">410.0</td><td class="bench-number">172.4</td><td class="bench-number">157.2</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-number">150.0</td><td class="bench-number">87.6</td><td class="bench-export bench-number">3.33<small>3.00×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3426865175">芙莉莲</a></th><td class="bench-number bench-ours">499.5</td><td class="bench-number">195.0</td><td class="bench-number">164.7</td><td class="bench-number">142.5</td><td class="bench-number">169.9</td><td class="bench-number">92.0</td><td class="bench-export bench-number">3.22<small>3.11×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3448877775">Alone</a></th><td class="bench-number bench-ours">440.2</td><td class="bench-number">172.5</td><td class="bench-number">153.7</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-number">152.5</td><td class="bench-number">71.9</td><td class="bench-export bench-number">3.56<small>2.81×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3713073223">Lost Landscape 3</a></th><td class="bench-number bench-ours">504.3</td><td class="bench-number">183.7</td><td class="bench-number">159.3</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-number">162.9</td><td class="bench-number">89.0</td><td class="bench-export bench-number">3.28<small>3.05×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3589454154">土星</a></th><td class="bench-number bench-ours">346.9</td><td class="bench-number">202.1</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-export bench-number">11.44<small>1.75×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3662790108">实时太阳系</a></th><td class="bench-number bench-ours">233.4</td><td class="bench-number">120.1</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-export bench-number">10.37<small>1.93×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3200802205">德累斯顿</a></th><td class="bench-number bench-ours">789.4</td><td class="bench-number">210.4</td><td class="bench-number">179.2</td><td class="bench-number">185.1</td><td class="bench-number">185.6</td><td class="bench-number">94.1</td><td class="bench-export bench-number">3.15<small>3.18×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3572340969">DELTARUNE Door</a></th><td class="bench-number bench-ours">933.9</td><td class="bench-number">203.1</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-export bench-number">4.32<small>2.31×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3691570025">夜之城</a></th><td class="bench-number bench-ours">530.1</td><td class="bench-number">193.7</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-number">87.6</td><td class="bench-export bench-number">3.24<small>3.09×</small></td></tr>
-<tr class="bench-average"><th scope="row">Periodica<br>平均速度比</th><td class="bench-number">—</td><td class="bench-number">2.79×</td><td class="bench-number">3.50×</td><td class="bench-number">4.99×</td><td class="bench-number">3.37×</td><td class="bench-number">6.28×</td><td class="bench-export bench-number"><strong>2.74×</strong><small>实时</small></td></tr></tbody></table></div></div></div>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3441873795">Kirby</a></th><td class="bench-number bench-ours">518.6</td><td class="bench-number">182.1</td><td class="bench-number">150.6</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-number">160.9</td><td class="bench-number">86.4</td><td class="bench-export bench-number">3.59<small>2.78×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3669681034">亚托莉</a></th><td class="bench-number bench-ours">631.1</td><td class="bench-number">229.4</td><td class="bench-number">171.6</td><td class="bench-number">191.0</td><td class="bench-number">170.7</td><td class="bench-number">87.1</td><td class="bench-export bench-number">3.53<small>2.83×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3258032485">绫波丽</a></th><td class="bench-number bench-ours">665.8</td><td class="bench-number">232.0</td><td class="bench-number">168.7</td><td class="bench-number">195.6</td><td class="bench-number">171.1</td><td class="bench-number">86.2</td><td class="bench-export bench-number">3.41<small>2.93×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3650475846">虹夏</a></th><td class="bench-number bench-ours">402.1</td><td class="bench-number">136.4</td><td class="bench-number">146.5</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-number">139.1</td><td class="bench-number">80.6</td><td class="bench-export bench-number">3.47<small>2.88×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3426865175">芙莉莲</a></th><td class="bench-number bench-ours">506.9</td><td class="bench-number">185.8</td><td class="bench-number">166.8</td><td class="bench-number">128.6</td><td class="bench-number">143.5</td><td class="bench-number">87.0</td><td class="bench-export bench-number">3.37<small>2.96×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3448877775">Alone</a></th><td class="bench-number bench-ours">391.0</td><td class="bench-number">175.6</td><td class="bench-number">143.4</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-number">138.2</td><td class="bench-number">76.8</td><td class="bench-export bench-number">3.50<small>2.86×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3713073223">Lost Landscape 3</a></th><td class="bench-number bench-ours">491.4</td><td class="bench-number">199.7</td><td class="bench-number">148.0</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-number">146.7</td><td class="bench-number">92.6</td><td class="bench-export bench-number">3.31<small>3.02×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3589454154">土星</a></th><td class="bench-number bench-ours">364.6</td><td class="bench-number">181.2</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-export bench-number">7.71<small>2.60×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3662790108">实时太阳系</a></th><td class="bench-number bench-ours">178.4</td><td class="bench-number">108.7</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-export bench-number">9.79<small>2.04×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3200802205">德累斯顿</a></th><td class="bench-number bench-ours">815.8</td><td class="bench-number">245.7</td><td class="bench-number">175.5</td><td class="bench-number">201.6</td><td class="bench-number">203.1</td><td class="bench-number">96.8</td><td class="bench-export bench-number">3.18<small>3.15×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3572340969">DELTARUNE Door</a></th><td class="bench-number bench-ours">970.1</td><td class="bench-number">268.0</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-export bench-number">4.28<small>2.34×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3691570025">夜之城</a></th><td class="bench-number bench-ours">529.7</td><td class="bench-number">166.8</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-unavailable bench-timeout">超时</td><td class="bench-unavailable bench-unsupported">不兼容</td><td class="bench-number">90.0</td><td class="bench-export bench-number">3.18<small>3.14×</small></td></tr>
+<tr class="bench-average"><th scope="row">Periodica<br>平均速度比</th><td class="bench-number">—</td><td class="bench-number">2.72×</td><td class="bench-number">3.44×</td><td class="bench-number">3.67×</td><td class="bench-number">3.43×</td><td class="bench-number">6.28×</td><td class="bench-export bench-number"><strong>2.79×</strong><small>实时</small></td></tr></tbody></table></div></div></div>
 </section>
 
 <section id="roadmap">
@@ -247,7 +247,7 @@
   <h2>简短回答。</h2>
   <div class="faq">
     <details><summary>我最直接能得到什么？</summary><p>让喜欢的动态壁纸以更低的功耗运行。</p></details>
-    <details><summary>它能让每一张壁纸都更省资源吗？</summary><p>轻量场景本身没有多少可节省的空间，工具会在渲染之前直接说明。功耗较高、以周期性动画为主的场景才是 13–97% 降幅的来源；以交互为主的场景则会烘焙其中确定性的核心部分，其余交互与实时内容分别处理。</p></details>
+    <details><summary>它能让每一张壁纸都更省资源吗？</summary><p>轻量场景本身没有多少可节省的空间，工具会在渲染之前直接说明。功耗较高、以周期性动画为主的场景才是 15–97% 降幅的来源；以交互为主的场景则会烘焙其中确定性的核心部分，其余交互与实时内容分别处理。</p></details>
     <details><summary>烘焙后的循环看起来会和原始壁纸不一样吗？</summary><p>可见变化预算由你选择：效率、平衡或质量。报告会逐项列出每一个被重新定时的组件及其精确百分比。接缝会根据原始场景自身的运动进行验证，通过之后输出才会被接受。</p></details>
     <details><summary>我需要准备什么？</summary><p>Windows、Wallpaper Engine，以及一块用于离线渲染的 GPU。便携版没有安装程序，也不需要 Python。烘焙一个典型场景需要几分钟；播放时由视频解码器处理烘焙内容，保留的实时图层继续渲染。</p></details>
     <details><summary>它是开源的吗？</summary><p>是。工具层采用 MIT 许可，渲染器采用 GPL v2；完整源码、第三方声明与构建记录都在仓库中。</p></details>
@@ -255,7 +255,7 @@
 </section>
 
 <footer>
-  <div>Periodica · 首个应用：WPE Baker 2.1.0 · 2026</div>
+  <div>Periodica · 首个应用：WPE Baker 2.1.1 · 2026</div>
   <div>页面中展示的壁纸美术作品归各自的 Steam Workshop 作者所有</div>
 </footer>
 </div>

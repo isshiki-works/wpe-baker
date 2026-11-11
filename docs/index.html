@@ -21,7 +21,7 @@
 
 <div class="wrap">
 <nav>
-  <div class="logo">PERIODICA<small>WPE BAKER · 2.1.0</small></div>
+  <div class="logo">PERIODICA<small>WPE BAKER · 2.1.1</small></div>
   <div class="links"><a href="#loop">The loop</a><a href="#numbers">Numbers</a><a href="#refresh">Refresh rate</a><a href="#gui">The tool</a><a href="#astra">Technology</a><a href="#roadmap">Roadmap</a></div>
   <div class="lang"><a href="index.html" aria-current="page" onclick="try{localStorage.setItem('lang','en')}catch(e){}">EN</a><a href="zh.html" onclick="try{localStorage.setItem('lang','zh')}catch(e){}">中文</a></div>
 </nav>
@@ -32,14 +32,14 @@
     <h1>Your wallpaper renders forever.<br><span>Bake it once.</span></h1>
     <p class="lead">Periodica analyzes the motion in Wallpaper Engine scenes, brings repeating animations into a seamless loop, and renders that loop as video. Your wallpaper keeps moving, with clocks, music response and other live content alongside it. The GPU does less of the same work, over and over. Its first application is WPE Baker.</p>
     <div class="cta">
-      <a class="btn primary" href="https://github.com/isshiki-works/wpe-baker/releases/tag/v2.1.0">Download for Windows</a>
+      <a class="btn primary" href="https://github.com/isshiki-works/wpe-baker/releases/tag/v2.1.1">Download for Windows</a>
       <a class="btn ghost" href="#numbers">Read the measurements</a>
     </div>
     <div class="fine" style="margin-top:12px">open source · portable · no AI model calls at runtime</div>
   </div>
   <div class="screen">
     <video src="site/hero-landscape.mp4" autoplay muted loop playsinline aria-label="Baked wallpaper output playing as a seamless 50-second loop"></video>
-    <div class="bar"><span>SAMPLE OUTPUT · THE BAKED LOOP · Lost Landscape 3 (northway)<br><span class="tag">one seam-checked 50 s loop at 60 fps, playing here as a 3.4 MB file</span></span><b>−59.2%</b></div>
+    <div class="bar"><span>SAMPLE OUTPUT · THE BAKED LOOP · Lost Landscape 3 (northway)<br><span class="tag">one seam-checked 50 s loop at 60 fps, playing here as a 3.4 MB file</span></span><b>−57.2%</b></div>
   </div>
 </div>
 
@@ -63,7 +63,7 @@
   </div>
   <div class="trace" aria-label="Illustrative power trace, original versus baked playback">
     <div class="hdr"><span>iGPU power · W · Atri · 165 FPS</span><span>A / B / B / A · Illustrative power trace</span></div>
-    <svg viewBox="0 0 560 300" role="img" aria-label="Original about 25.6 W, baked about 2.2 W; illustration of power changing between original and baked playback">
+    <svg data-trace="2.1" viewBox="0 0 560 300" role="img" aria-label="Original about 25.6 W, baked about 2.2 W; illustration of power changing between original and baked playback">
       <rect class="band" x="40" y="14" width="120" height="250"></rect>
       <rect class="band" x="300" y="14" width="120" height="250"></rect>
       <text class="bandl" x="100" y="28">A · original</text>
@@ -76,9 +76,9 @@
       <text class="axl" x="6" y="148">15</text><line class="ax" x1="36" y1="144" x2="40" y2="144"></line>
       <text class="axl" x="12" y="268">0</text>
       <text class="axl" x="438" y="286">Playback time →</text>
-      <path class="tr-o" d="M40,59.58 L52,58.73 L64,60.44 L76,58.29 L88,60.01 L100,59.15 L112,60.87 L124,58.73 L136,59.58 L148,58.29 L160,60.01 L168,111.14 L176,202.44 L184,240.04 L188,245.62"></path>
-      <path class="tr-o" d="M420,246.48 L424,231.44 L430,164.85 L436,85.36 L442,60.01 L452,58.73 L464,60.01 L476,58.73 L488,60.44 L500,59.15 L512,59.58 L524,58.29 L536,60.01 L548,59.15 L556,59.58"></path>
-      <path class="tr-b" d="M188,245.62 L200,246.48 L212,245.62 L224,246.91 L236,246.05 L248,246.48 L260,245.62 L272,246.91 L284,246.05 L296,246.48 L308,246.05 L320,246.91 L332,245.62 L344,246.48 L356,246.05 L368,246.91 L380,245.62 L392,246.48 L404,246.05 L416,246.91 L420,246.48"></path>
+      <path class="tr-o" d="M40,56.69 L52,55.83 L64,57.56 L76,55.39 L88,57.13 L100,56.26 L112,58.00 L124,55.83 L136,56.69 L148,55.39 L160,57.13 L168,108.85 L176,201.21 L184,239.25 L188,244.89"></path>
+      <path class="tr-o" d="M420,245.76 L424,230.55 L430,163.18 L436,82.77 L442,57.13 L452,55.83 L464,57.13 L476,55.83 L488,57.56 L500,56.26 L512,56.69 L524,55.39 L536,57.13 L548,56.26 L556,56.69"></path>
+      <path class="tr-b" d="M188,244.89 L200,245.76 L212,244.89 L224,246.20 L236,245.33 L248,245.76 L260,244.89 L272,246.20 L284,245.33 L296,245.76 L308,245.33 L320,246.20 L332,244.89 L344,245.76 L356,245.33 L368,246.20 L380,244.89 L392,245.76 L404,245.33 L416,246.20 L420,245.76"></path>
       <text class="axl" x="164" y="50">25.6 W</text>
       <text class="axl" x="244" y="238" style="fill:#0e7f6d">2.2 W · −91%</text>
     </svg>
@@ -98,16 +98,16 @@
 </section>
 
 <section id="gui">
-  <div class="eyebrow">2.0 · Redesigned interface</div>
+  <div class="eyebrow">Interface</div>
   <h2>From scene to finished wallpaper.</h2>
-  <p class="sub">2.0 brings a new liquid glass interface, with wallpaper selection, generation settings and the task queue in one window. Start with your current wallpaper or drop in a scene, choose how it should look and play, then preview, apply or export the result.</p>
+  <p class="sub">WPE Baker has a liquid glass interface, with wallpaper selection, generation settings and the task queue in one window. Start with your current wallpaper or drop in a scene, choose how it should look and play, then preview, apply or export the result.</p>
   <div class="tool">
     <div class="steps">
       <div><b>01</b><h3>Use the current wallpaper or drop in a scene</h3><p>The app reads the wallpaper currently selected in Wallpaper Engine. You can also drop in a wallpaper folder or scene file to begin analysis.</p></div>
       <div><b>02</b><h3>Review the plan and choose the output</h3><p>The analysis shows what can be generated and what stays live. Adjust animation precision, interaction, frame rate and resolution on the left, alongside the wallpaper’s own configurable properties.</p></div>
       <div><b>03</b><h3>Generate, preview and apply</h3><p>The queue on the right shows progress and check results. Once a job finishes, preview it in Wallpaper Engine, apply it to a selected screen, export a ZIP, or restore the previous wallpaper.</p></div>
     </div>
-    <figure class="shot"><a class="shot-view" href="site/gui-2.0-en.png" target="_blank" aria-label="View WPE Baker interface at full size"><img src="site/gui-2.0-en.png" alt="WPE Baker 2.0 liquid glass interface with scene preview, generation settings and a completed task" width="1534" height="1180" loading="lazy"></a><figcaption><span>WPE Baker 2.0 · Scene preview and task management.</span><a href="site/gui-2.0-en.png" target="_blank">View full size ↗</a></figcaption></figure>
+    <figure class="shot"><a class="shot-view" href="site/gui-2.1-en.png" target="_blank" aria-label="View WPE Baker interface at full size"><img src="site/gui-2.1-en.png" alt="WPE Baker 2.1 liquid glass interface with scene preview, generation settings and a completed task" width="1534" height="1180" loading="lazy"></a><figcaption><span>WPE Baker 2.1 · Scene preview and task management.</span><a href="site/gui-2.1-en.png" target="_blank">View full size ↗</a></figcaption></figure>
   </div>
 </section>
 
@@ -116,28 +116,28 @@
   <h2>The cost of repetition.</h2>
   <p class="sub">Measurements use an Intel Arc B390 laptop and the official Wallpaper Engine player, alternating the original scene and baked output in A/B/B/A order. Outputs use 1920×1080 at 60 fps, Balanced precision and default wallpaper properties; originals render normally on the 3072×1920 screen. iGPU and CPU-package power are recorded separately.</p>
   <div class="gal">
-    <figure><img src="site/thumb-3713073223.jpg" alt="Lost Landscape 3 wallpaper preview"><figcaption><b>−59.2%</b>Lost Landscape 3<small>3713073223 · effect prefix</small></figcaption></figure>
-    <figure><img src="site/thumb-3448877775.jpg" alt="Alone wallpaper preview"><figcaption><b>−12.8%</b>Alone<small>3448877775 · effect prefix</small></figcaption></figure>
-    <figure><img src="site/thumb-3650475846.jpg" alt="Nijika wallpaper preview"><figcaption><b>−29.9%</b>Nijika<small>3650475846 · effect prefix</small></figcaption></figure>
-    <figure><img src="site/thumb-3426865175.jpg" alt="Frieren wallpaper preview"><figcaption><b>−31.6%</b>Frieren<small>3426865175 · effect prefix</small></figcaption></figure>
-    <figure><img src="site/thumb-3669681034.jpg" alt="Atri wallpaper preview"><figcaption><b>−96.8%</b>Atri<small>3669681034 · effect prefix</small></figcaption></figure>
+    <figure><img src="site/thumb-3713073223.jpg" alt="Lost Landscape 3 wallpaper preview"><figcaption><b>−57.2%</b>Lost Landscape 3<small>3713073223 · effect prefix</small></figcaption></figure>
+    <figure><img src="site/thumb-3448877775.jpg" alt="Alone wallpaper preview"><figcaption><b>−14.7%</b>Alone<small>3448877775 · effect prefix</small></figcaption></figure>
+    <figure><img src="site/thumb-3650475846.jpg" alt="Nijika wallpaper preview"><figcaption><b>−29.7%</b>Nijika<small>3650475846 · effect prefix</small></figcaption></figure>
+    <figure><img src="site/thumb-3426865175.jpg" alt="Frieren wallpaper preview"><figcaption><b>−27.0%</b>Frieren<small>3426865175 · effect prefix</small></figcaption></figure>
+    <figure><img src="site/thumb-3669681034.jpg" alt="Atri wallpaper preview"><figcaption><b>−96.9%</b>Atri<small>3669681034 · effect prefix</small></figcaption></figure>
     <figure><img src="site/thumb-3685247684.jpg" alt="Ultraman Leo wallpaper preview"><figcaption><b>−84.1%</b>Ultraman Leo<small>3685247684 · effect prefix + live layers</small></figcaption></figure>
   </div>
   <div class="tablewrap">
   <table>
 <thead><tr><th>Wallpaper</th><th>Original iGPU</th><th>Baked iGPU</th><th>Change</th><th>CPU package: original → baked</th></tr></thead>
 <tbody>
-<tr><td>Nijika (Bocchi the Rock!)<span class="id">3650475846</span></td><td class="num">20.87 W</td><td class="num">14.63 W</td><td class="delta">−29.9%</td><td class="num">31.80 → 26.51 W</td></tr>
-<tr><td>Alone (day/night scene)<span class="id">3448877775</span></td><td class="num">5.52 W</td><td class="num">4.81 W</td><td class="delta">−12.8%</td><td class="num">15.45 → 16.17 W</td></tr>
-<tr><td>Atri — My Dear Moments<span class="id">3669681034</span></td><td class="num">8.51 W</td><td class="num">0.27 W</td><td class="delta">−96.8%</td><td class="num">17.85 → 9.26 W</td></tr>
-<tr><td>Ultraman Leo<span class="id">3685247684</span></td><td class="num">9.08 W</td><td class="num">1.44 W</td><td class="delta">−84.1%</td><td class="num">19.58 → 11.58 W</td></tr>
-<tr><td>Yuri<span class="id">3572877776</span></td><td class="num">2.10 W</td><td class="num">0.48 W</td><td class="delta">−77.4%</td><td class="num">11.59 → 9.45 W</td></tr>
-<tr><td>Frieren — Pagoda of flowers<span class="id">3426865175</span></td><td class="num">10.57 W</td><td class="num">7.23 W</td><td class="delta">−31.6%</td><td class="num">19.62 → 19.64 W</td></tr>
-<tr><td>Lost Landscape 3<span class="id">3713073223</span></td><td class="num">8.10 W</td><td class="num">3.30 W</td><td class="delta">−59.2%</td><td class="num">17.96 → 13.61 W</td></tr>
-<tr><td>Ayanami Rei<span class="id">3258032485</span></td><td class="num">2.16 W</td><td class="num">0.14 W</td><td class="delta">−93.4%</td><td class="num">11.23 → 8.72 W</td></tr>
+<tr><td>Nijika (Bocchi the Rock!)<span class="id">3650475846</span></td><td class="num">20.98 W</td><td class="num">14.74 W</td><td class="delta">−29.7%</td><td class="num">31.13 → 26.95 W</td></tr>
+<tr><td>Alone (day/night scene)<span class="id">3448877775</span></td><td class="num">5.74 W</td><td class="num">4.90 W</td><td class="delta">−14.7%</td><td class="num">15.08 → 15.03 W</td></tr>
+<tr><td>Atri — My Dear Moments<span class="id">3669681034</span></td><td class="num">8.39 W</td><td class="num">0.26 W</td><td class="delta">−96.9%</td><td class="num">16.11 → 7.94 W</td></tr>
+<tr><td>Ultraman Leo<span class="id">3685247684</span></td><td class="num">8.99 W</td><td class="num">1.43 W</td><td class="delta">−84.1%</td><td class="num">17.87 → 9.71 W</td></tr>
+<tr><td>Yuri<span class="id">3572877776</span></td><td class="num">2.25 W</td><td class="num">0.45 W</td><td class="delta">−80.0%</td><td class="num">10.55 → 8.40 W</td></tr>
+<tr><td>Frieren — Pagoda of flowers<span class="id">3426865175</span></td><td class="num">10.67 W</td><td class="num">7.79 W</td><td class="delta">−27.0%</td><td class="num">20.00 → 18.74 W</td></tr>
+<tr><td>Lost Landscape 3<span class="id">3713073223</span></td><td class="num">8.14 W</td><td class="num">3.48 W</td><td class="delta">−57.2%</td><td class="num">17.13 → 12.84 W</td></tr>
+<tr><td>Ayanami Rei<span class="id">3258032485</span></td><td class="num">2.28 W</td><td class="num">0.13 W</td><td class="delta">−94.4%</td><td class="num">8.85 → 7.15 W</td></tr>
 </tbody></table>
   </div>
-  <div class="note">AC power · Default wallpaper properties · Balanced precision · 20 seconds per segment. The table shows 2.0 data. 2.1 re-test, iGPU power change: Atri −97.3%, Ayanami Rei −94.6%, Nijika −27.1%, Alone −11.3%. Wallpaper artwork belongs to its Steam Workshop authors.</div>
+  <div class="note">AC power · Default wallpaper properties · Balanced precision · 20 seconds per segment. Wallpaper artwork belongs to its Steam Workshop authors.</div>
 </section>
 
 <section id="refresh">
@@ -145,9 +145,9 @@
   <h2>High refresh rates. Lower power use.</h2>
   <p class="sub">As playback frame rate rises, the original scene has to render more images in real time. Baking periodic animation into video lets the video decoder handle that part of playback, reducing repeated work on the 3D engine. Retained clocks, audio response and other live content continue to run as before.<br><br>This project began on a laptop with an iGPU.</p>
   <div class="tablewrap"><table><thead><tr><th>Wallpaper / frame rate</th><th>Original iGPU</th><th>Baked iGPU</th><th>Change</th><th>CPU package: original → baked</th></tr></thead><tbody>
-<tr><td>Atri · 60 fps</td><td class="num">8.50 W</td><td class="num">0.30 W</td><td class="delta">−96.5%</td><td class="num">16.53 → 9.33 W</td></tr>
-<tr><td>Atri · 165 fps</td><td class="num">25.55 W</td><td class="num">2.19 W</td><td class="delta">−91.4%</td><td class="num">37.67 → 12.84 W</td></tr>
-<tr><td>Ayanami Rei · 120 fps</td><td class="num">8.75 W</td><td class="num">1.97 W</td><td class="delta">−77.5%</td><td class="num">18.62 → 13.72 W</td></tr>
+<tr><td>Atri · 60 fps</td><td class="num">8.40 W</td><td class="num">0.26 W</td><td class="delta">−96.9%</td><td class="num">16.22 → 8.14 W</td></tr>
+<tr><td>Atri · 165 fps</td><td class="num">25.56 W</td><td class="num">2.24 W</td><td class="delta">−91.2%</td><td class="num">38.30 → 13.77 W</td></tr>
+<tr><td>Ayanami Rei · 120 fps</td><td class="num">8.62 W</td><td class="num">1.50 W</td><td class="delta">−82.6%</td><td class="num">18.00 → 11.56 W</td></tr>
 </tbody></table></div>
   <div class="note">Original and baked output at native display resolution (3072×1920), official player, AC power, A/B/B/A, 20 seconds per segment.</div>
 </section>
@@ -185,7 +185,7 @@
   <div class="spec">
     <div>
       <p>A Wallpaper Engine scene can contain hundreds of shader variants, particle systems, script controllers and video layers. Finding two similar frames is not enough to bake them into a loop: the program needs to know how animation changes over time, and which parts must keep responding to live input.</p>
-      <p>2.0 replaces the old library of period equations with shader time analysis. It applies abstract interpretation to the compiled SPIR-V, following time through the data flow to derive cycles, continuous drift and animation that settles after a while. New effects no longer need a hand-written equation of their own; unfamiliar custom shaders can be analyzed too.</p>
+      <p>Periodica replaces the early library of period equations with shader time analysis. It applies abstract interpretation to the compiled SPIR-V, following time through the data flow to derive cycles, continuous drift and animation that settles after a while. New effects no longer need a hand-written equation of their own; unfamiliar custom shaders can be analyzed too.</p>
       <p>Once the periods are known, the program looks for parameters it can adjust locally. Waves, glows and scrolling within one effect no longer have to speed up together. Motions that can be adjusted independently are coordinated separately, and independent video groups repeat at their own intervals.</p>
       <p>Author scripts are also included in time analysis. Constants, periodic changes and opening animations can be identified; where state carried between frames can be simulated exactly, the program searches for that state to recur. Content that depends on the mouse, audio or the clock stays live.</p>
       <p>To put the baked result back into the original scene, Periodica also handles transparency, blending order and HDR intermediate images. Brightness outside ordinary video range is mapped into the video and restored by a generated shader, so cached content can continue through the author’s existing effect chain.</p>
@@ -206,29 +206,29 @@
   <h2>Redesigning the rendering pipeline for offline generation</h2>
   <div class="renderer-copy">
       <p>Building on open-wallpaper-engine, Periodica reworks scene execution and the Vulkan offline rendering pipeline. Shaders, scripts, particles and video advance in deterministic time steps, with simulation, drawing and sampling scheduled separately. Warm-up no longer reads back images that will be discarded, loop-start searches draw only the frames needed for comparison, and independent video groups are generated at their own periods.</p>
-      <p>In the previous baking pipeline, transparent frames passed through full-frame readback, CPU scanning, lossless intermediate video and a second encoding pass. Version 2.0 moves cropping, transparency processing and loop crossfades into the GPU pipeline, then feeds the result directly to the hardware encoder. Fewer data transfers, intermediate files and repeated computations make the entire generation process faster.</p>
-      <p>In a same-scene comparison on an RTX 5090 D v2, full 4K baking time fell from about <strong>15 minutes to 36 seconds, a roughly 25-fold speedup</strong>. A separate long-scene 4K test reached <strong>3.5 times real-time speed</strong> from analysis through generation, producing <strong>10 minutes of 4K 60 FPS animation in about 3 minutes</strong>.</p>
+      <p>In early versions, transparent frames passed through full-frame readback, CPU scanning, lossless intermediate video and a second encoding pass. Cropping, transparency processing and loop crossfades now run in the GPU pipeline, which feeds the result directly to the hardware encoder. Fewer data transfers, intermediate files and repeated computations make the entire generation process faster.</p>
+      <p>In a same-scene comparison on an RTX 5090 D v2, full 4K baking time fell from <strong>108 seconds to 17 seconds, more than a 6-fold speedup</strong>. A separate long-scene 4K test reached <strong>3.7 times real-time speed</strong> from analysis through generation, producing <strong>4 minutes 18 seconds of 4K 60 FPS animation in about 70 seconds</strong>.</p>
   </div>
 </section>
 
 
 <section id="render-benchmark"><div class="bench-layout"><div class="bench-description">
 <div class="eyebrow">Real-world validation</div><h2>Refined through testing.</h2>
-<div class="bench-copy"><p>In preparation for the 2.0 release, we refined compatibility and generation performance through regression testing on <strong>489 real Workshop wallpapers</strong> and 4K rendering and video export tests across <strong>12 scenes of different types</strong>.</p><p>On the same set, scenes eligible for baking increased from <strong>244 in version 1.0.2 to 440</strong>, reaching <strong>90.0% coverage</strong>. Coverage among the <strong>41 popular wallpapers</strong> in the test set rose from <strong>22 to 37</strong>.</p><p>2.1 continues to optimize the shared rendering path. Across the same 24 test scenes, median full-frame rendering throughput rose <strong>2.00×</strong> on an RTX 5090 D v2 and <strong>1.58×</strong> on an Intel Arc B390 relative to 2.0.0, and the 3,240 sampled frames match 2.0.0 exactly.</p><p>Results from five open-source renderers serve as performance references. In the 4K scene tests on an RTX 5090 D v2, Periodica 2.1 averages <strong>2.79–6.28× the reference rendering speeds</strong>. Reference results date from October 2026 and were not re-measured; video export figures are from 2.0, averaging <strong>2.74× real time</strong>.</p></div><div id="compatibility" class="bench-compatibility"><table class="bench-coverage"><thead><tr><th>Regression coverage</th><th>1.0.2</th><th>2.0</th></tr></thead><tbody><tr><th scope="row">Baking coverage</th><td>244 / 489</td><td><strong>440 / 489</strong></td></tr><tr><th scope="row">Coverage</th><td>49.9%</td><td><strong>90.0%</strong></td></tr><tr><th scope="row">Popular wallpapers</th><td>22 / 41</td><td><strong>37 / 41</strong></td></tr></tbody></table></div></div><div class="bench-results">
+<div class="bench-copy"><p>We refined compatibility and generation performance through regression testing on <strong>489 real Workshop wallpapers</strong> and 4K rendering and video export tests across <strong>12 scenes of different types</strong>.</p><p>On the same set, scenes eligible for baking increased from <strong>244 in version 1.0.2 to 444</strong>, reaching <strong>90.8% coverage</strong>. Coverage among the <strong>41 popular wallpapers</strong> in the test set rose from <strong>22 to 37</strong>.</p><p>2.1 continues to optimize the shared rendering path. Across the same 24 test scenes, median full-frame rendering throughput rose <strong>2.00×</strong> on an RTX 5090 D v2 and <strong>1.58×</strong> on an Intel Arc B390 relative to 2.0.0.</p><p>Results from five open-source renderers serve as performance references. In the 4K scene tests on an RTX 5090 D v2, Periodica averages <strong>2.72–6.28× the reference rendering speeds</strong>, with video export averaging <strong>2.79× real time</strong>.</p></div><div id="compatibility" class="bench-compatibility"><table class="bench-coverage"><thead><tr><th>Regression coverage</th><th>1.0.2</th><th>2.1</th></tr></thead><tbody><tr><th scope="row">Baking coverage</th><td>244 / 489</td><td><strong>444 / 489</strong></td></tr><tr><th scope="row">Coverage</th><td>49.9%</td><td><strong>90.8%</strong></td></tr><tr><th scope="row">Popular wallpapers</th><td>22 / 41</td><td><strong>37 / 41</strong></td></tr></tbody></table></div></div><div class="bench-results">
 <div class="bench-hardware">RTX 5090 D v2 <span>4K · 3840×2160</span></div><div class="bench-sheet" tabindex="0" role="region" aria-label="4K rendering on RTX 5090 D v2"><table class="bench-overview"><colgroup><col class="bench-scene-column"></colgroup><colgroup span="6"></colgroup><colgroup><col class="bench-export-column"></colgroup><thead><tr><th rowspan="2" scope="col">Wallpaper</th><th colspan="6" scope="colgroup" class="bench-frame-heading">Rendering / FPS</th><th rowspan="2" scope="col" class="bench-export-heading">Periodica<br>Video export<small>sec · × real time</small></th></tr><tr><th scope="col">Periodica</th><th scope="col">WebWallGL</th><th scope="col">Almamu</th><th scope="col">Portghost</th><th scope="col">Mac<br>renderer</th><th scope="col">AnisPaper</th></tr></thead><tbody>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3441873795">Kirby</a></th><td class="bench-number bench-ours">537.3</td><td class="bench-number">196.7</td><td class="bench-number">121.6</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-number">151.2</td><td class="bench-number">89.5</td><td class="bench-export bench-number">3.50<small>2.86×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3669681034">Atri</a></th><td class="bench-number bench-ours">650.0</td><td class="bench-number">241.6</td><td class="bench-number">166.2</td><td class="bench-number">92.6</td><td class="bench-number">162.0</td><td class="bench-number">98.6</td><td class="bench-export bench-number">3.58<small>2.79×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3258032485">Rei</a></th><td class="bench-number bench-ours">720.0</td><td class="bench-number">238.7</td><td class="bench-number">199.6</td><td class="bench-number">139.4</td><td class="bench-number">207.9</td><td class="bench-number">95.4</td><td class="bench-export bench-number">3.31<small>3.03×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3650475846">Nijika</a></th><td class="bench-number bench-ours">410.0</td><td class="bench-number">172.4</td><td class="bench-number">157.2</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-number">150.0</td><td class="bench-number">87.6</td><td class="bench-export bench-number">3.33<small>3.00×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3426865175">Frieren</a></th><td class="bench-number bench-ours">499.5</td><td class="bench-number">195.0</td><td class="bench-number">164.7</td><td class="bench-number">142.5</td><td class="bench-number">169.9</td><td class="bench-number">92.0</td><td class="bench-export bench-number">3.22<small>3.11×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3448877775">Alone</a></th><td class="bench-number bench-ours">440.2</td><td class="bench-number">172.5</td><td class="bench-number">153.7</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-number">152.5</td><td class="bench-number">71.9</td><td class="bench-export bench-number">3.56<small>2.81×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3713073223">Lost Landscape 3</a></th><td class="bench-number bench-ours">504.3</td><td class="bench-number">183.7</td><td class="bench-number">159.3</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-number">162.9</td><td class="bench-number">89.0</td><td class="bench-export bench-number">3.28<small>3.05×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3589454154">Saturn</a></th><td class="bench-number bench-ours">346.9</td><td class="bench-number">202.1</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-export bench-number">11.44<small>1.75×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3662790108">Solar System</a></th><td class="bench-number bench-ours">233.4</td><td class="bench-number">120.1</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-export bench-number">10.37<small>1.93×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3200802205">Dresden</a></th><td class="bench-number bench-ours">789.4</td><td class="bench-number">210.4</td><td class="bench-number">179.2</td><td class="bench-number">185.1</td><td class="bench-number">185.6</td><td class="bench-number">94.1</td><td class="bench-export bench-number">3.15<small>3.18×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3572340969">DELTARUNE Door</a></th><td class="bench-number bench-ours">933.9</td><td class="bench-number">203.1</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-export bench-number">4.32<small>2.31×</small></td></tr>
-<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3691570025">Night City</a></th><td class="bench-number bench-ours">530.1</td><td class="bench-number">193.7</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-number">87.6</td><td class="bench-export bench-number">3.24<small>3.09×</small></td></tr>
-<tr class="bench-average"><th scope="row">Periodica<br>mean speed ratio</th><td class="bench-number">—</td><td class="bench-number">2.79×</td><td class="bench-number">3.50×</td><td class="bench-number">4.99×</td><td class="bench-number">3.37×</td><td class="bench-number">6.28×</td><td class="bench-export bench-number"><strong>2.74×</strong><small>real time</small></td></tr></tbody></table></div></div></div>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3441873795">Kirby</a></th><td class="bench-number bench-ours">518.6</td><td class="bench-number">182.1</td><td class="bench-number">150.6</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-number">160.9</td><td class="bench-number">86.4</td><td class="bench-export bench-number">3.59<small>2.78×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3669681034">Atri</a></th><td class="bench-number bench-ours">631.1</td><td class="bench-number">229.4</td><td class="bench-number">171.6</td><td class="bench-number">191.0</td><td class="bench-number">170.7</td><td class="bench-number">87.1</td><td class="bench-export bench-number">3.53<small>2.83×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3258032485">Rei</a></th><td class="bench-number bench-ours">665.8</td><td class="bench-number">232.0</td><td class="bench-number">168.7</td><td class="bench-number">195.6</td><td class="bench-number">171.1</td><td class="bench-number">86.2</td><td class="bench-export bench-number">3.41<small>2.93×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3650475846">Nijika</a></th><td class="bench-number bench-ours">402.1</td><td class="bench-number">136.4</td><td class="bench-number">146.5</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-number">139.1</td><td class="bench-number">80.6</td><td class="bench-export bench-number">3.47<small>2.88×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3426865175">Frieren</a></th><td class="bench-number bench-ours">506.9</td><td class="bench-number">185.8</td><td class="bench-number">166.8</td><td class="bench-number">128.6</td><td class="bench-number">143.5</td><td class="bench-number">87.0</td><td class="bench-export bench-number">3.37<small>2.96×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3448877775">Alone</a></th><td class="bench-number bench-ours">391.0</td><td class="bench-number">175.6</td><td class="bench-number">143.4</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-number">138.2</td><td class="bench-number">76.8</td><td class="bench-export bench-number">3.50<small>2.86×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3713073223">Lost Landscape 3</a></th><td class="bench-number bench-ours">491.4</td><td class="bench-number">199.7</td><td class="bench-number">148.0</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-number">146.7</td><td class="bench-number">92.6</td><td class="bench-export bench-number">3.31<small>3.02×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3589454154">Saturn</a></th><td class="bench-number bench-ours">364.6</td><td class="bench-number">181.2</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-export bench-number">7.71<small>2.60×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3662790108">Solar System</a></th><td class="bench-number bench-ours">178.4</td><td class="bench-number">108.7</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-export bench-number">9.79<small>2.04×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3200802205">Dresden</a></th><td class="bench-number bench-ours">815.8</td><td class="bench-number">245.7</td><td class="bench-number">175.5</td><td class="bench-number">201.6</td><td class="bench-number">203.1</td><td class="bench-number">96.8</td><td class="bench-export bench-number">3.18<small>3.15×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3572340969">DELTARUNE Door</a></th><td class="bench-number bench-ours">970.1</td><td class="bench-number">268.0</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-export bench-number">4.28<small>2.34×</small></td></tr>
+<tr><th scope="row"><a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3691570025">Night City</a></th><td class="bench-number bench-ours">529.7</td><td class="bench-number">166.8</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-unavailable bench-timeout">Timed out</td><td class="bench-unavailable bench-unsupported">N/A</td><td class="bench-number">90.0</td><td class="bench-export bench-number">3.18<small>3.14×</small></td></tr>
+<tr class="bench-average"><th scope="row">Periodica<br>mean speed ratio</th><td class="bench-number">—</td><td class="bench-number">2.72×</td><td class="bench-number">3.44×</td><td class="bench-number">3.67×</td><td class="bench-number">3.43×</td><td class="bench-number">6.28×</td><td class="bench-export bench-number"><strong>2.79×</strong><small>real time</small></td></tr></tbody></table></div></div></div>
 </section>
 
 <section id="roadmap">
@@ -248,7 +248,7 @@
   <h2>Short answers.</h2>
   <div class="faq">
     <details><summary>What is the main benefit?</summary><p>Run your favorite animated wallpaper with lower power use.</p></details>
-    <details><summary>Which wallpapers benefit most?</summary><p>Scenes with demanding, repeating animation have the most to gain. The examples above used 13–97% less iGPU power after baking. Lightweight scenes have less work to save; scenes with extensive interaction keep their live content alongside the baked animation.</p></details>
+    <details><summary>Which wallpapers benefit most?</summary><p>Scenes with demanding, repeating animation have the most to gain. The examples above used 15–97% less iGPU power after baking. Lightweight scenes have less work to save; scenes with extensive interaction keep their live content alongside the baked animation.</p></details>
     <details><summary>Does the loop look different from the original?</summary><p>Choose Efficiency, Balanced or Quality to set the visible-change budget. The report lists every retimed component and its exact adjustment percentage. Each seam is checked against the original scene's motion before the output is accepted.</p></details>
     <details><summary>What do I need?</summary><p>Windows, Wallpaper Engine, and a GPU for the offline render. The portable build has no installer and no Python. Baking a typical scene takes minutes; the video decoder handles baked content while retained live layers continue rendering.</p></details>
     <details><summary>Is it open source?</summary><p>Yes. Tooling under MIT, the renderer under GPL v2; full source, third-party notices and build records are in the repository.</p></details>
@@ -256,7 +256,7 @@
 </section>
 
 <footer>
-  <div>Periodica · first application: WPE Baker 2.1.0 · 2026</div>
+  <div>Periodica · first application: WPE Baker 2.1.1 · 2026</div>
   <div>Wallpaper artwork shown belongs to its Steam Workshop authors</div>
 </footer>
 </div>
